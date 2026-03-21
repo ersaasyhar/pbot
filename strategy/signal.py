@@ -1,28 +1,29 @@
 def generate_signal(features):
     price = features["price"]
     momentum = features["momentum"]
-    volatility = features["volatility"]
     z_score = features["z_score"]
+    rsi = features["rsi"]
+    major_sma = features["major_sma"]
+    oi_trend = features.get("oi_trend", 0)
 
-    # --- REFINED STRATEGY 1: DYNAMIC MOMENTUM BREAKOUT ---
-    # Instead of a fixed 0.05, we look for moves that are 2 standard deviations away
-    # and confirm with positive momentum.
-    if z_score > 2.0 and momentum > 0:
-        # Avoid buying things that are already extremely "Yes" (low profit potential)
-        if price < 0.85:
+    # --- STRATEGY 1: MOMENTUM BREAKOUT (YES) ---
+    # Trend is up, z-score confirms breakout, RSI shows strength
+    # OI Guard: Price increase must be backed by increasing or stable Open Interest
+    if z_score > 1.5 and momentum > 0 and 55 < rsi < 85:
+        if price > major_sma and price < 0.80:
+            # We want to see OI not crashing (oi_trend >= -0.01)
+            if oi_trend >= -0.01:
+                return "BUY YES"
+
+    # --- STRATEGY 2: MEAN REVERSION (YES) ---
+    # Price crashed, z-score is very negative, RSI is oversold
+    if z_score < -2.2 and rsi < 25:
+        if price > 0.15:
             return "BUY YES"
 
-    # --- REFINED STRATEGY 2: MEAN REVERSION (MISPRICING) ---
-    # If a price crashes hard (Z-score < -2.5) but the market is still liquid,
-    # it might be an overreaction.
-    if z_score < -2.5:
-        # Buy the dip (Mean reversion play)
-        if price > 0.10:
-            return "BUY YES"
-
-    # --- REFINED STRATEGY 3: SELLING STRENGTH ---
-    # If it's over-extended at the top, might be a good time to sell or "Buy NO"
-    if z_score > 2.5 and price > 0.90:
+    # --- STRATEGY 3: SELLING EXHAUSTION (NO) ---
+    # Overbought conditions
+    if price > 0.90 and rsi > 85 and price < features["sma"]:
         return "BUY NO"
 
     return None

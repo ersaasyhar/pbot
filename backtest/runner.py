@@ -4,8 +4,8 @@ from strategy.signal import generate_signal
 from backtest.simulator import Trade
 from data.storage import DB_PATH
 
-TP = 0.03
-SL = -0.04
+TP = 0.05
+SL = -0.05
 
 def backtest():
 

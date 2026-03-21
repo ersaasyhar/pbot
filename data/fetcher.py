@@ -79,8 +79,21 @@ def parse_market(event, coin, timeframe):
         if price is None or price <= 0 or price > 1:
             continue
 
+        # Parse clobTokenIds (JSON string list)
+        ctids_raw = m.get("clobTokenIds")
+        clob_token_id = None
+        if ctids_raw:
+            try:
+                ctids = json.loads(ctids_raw)
+                if isinstance(ctids, list) and len(ctids) > 0:
+                    clob_token_id = str(ctids[0])
+            except:
+                pass
+
         markets.append({
             "market_id": str(m.get("id")),
+            "condition_id": m.get("conditionId"),
+            "clob_token_id": clob_token_id,
             "question": m.get("question", f"{coin.upper()} {timeframe}"),
             "price": float(price),
             "volume": float(m.get("volumeNum") or 0),
