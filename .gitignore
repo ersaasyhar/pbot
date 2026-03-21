@@ -12,3 +12,4 @@ wheels/
 
 *.log
 db/*.db*
+*.pid

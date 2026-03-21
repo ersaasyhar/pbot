@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from app.logger import get_logger
 from app.config import *
+from app.profiles import RISK_PROFILES
 
 from data.fetcher import fetch_markets_async
 from data.storage import insert_market, get_recent_prices, get_last_price, DB_PATH, init_db, get_recent_oi
@@ -21,16 +22,20 @@ from strategy.paper_trader import execute_virtual_trade, update_paper_trades
 load_dotenv()
 logger = get_logger()
 
-# Config from .env or defaults
-MAX_SPREAD = float(os.getenv("MAX_SPREAD", 0.03))
+# --- LOAD PROFILES FROM ENV ---
+RISK_PROFILE_NAME = os.getenv("RISK_PROFILE", "BALANCED").upper()
+SIZING_PROFILE_NAME = os.getenv("SIZING_PROFILE", "FIXED").upper()
+
+# Get actual profile dicts
+SELECTED_RISK_PROFILE = RISK_PROFILES.get(RISK_PROFILE_NAME, RISK_PROFILES["BALANCED"])
+MAX_SPREAD = SELECTED_RISK_PROFILE["max_spread"]
+MIN_VOL = SELECTED_RISK_PROFILE["min_volume"]
 
 async def run():
-    logger.info("Starting Polymarket Engine (Async v2 + CLOB + OI Guard)...")
+    logger.info(f"Starting Polymarket Engine...")
+    logger.info(f"Active Profiles: Risk={RISK_PROFILE_NAME}, Sizing={SIZING_PROFILE_NAME}")
     
-    # Ensure DB is initialized
     init_db()
-
-    # Initialize CLOB client
     clob_client = get_clob_client()
 
     while True:
@@ -46,7 +51,7 @@ async def run():
                 await asyncio.sleep(FETCH_INTERVAL)
                 continue
 
-            # --- NEW: BATCH FETCH OPEN INTEREST ---
+            # Batch fetch OI
             condition_ids = [m.get("condition_id") for m in markets if m.get("condition_id")]
             oi_data = await fetch_open_interest_batch(condition_ids)
             
@@ -54,8 +59,6 @@ async def run():
             processed = 0
             skipped_duplicates = 0
             blocked_by_spread = 0
-            
-            # For paper trader updates
             latest_prices = {}
 
             with conn:
@@ -73,13 +76,11 @@ async def run():
                         if any(x is None for x in [market_id, question, price, volume, coin, tf]):
                             continue
                             
-                        # Add OI to the market dict for storage
-                        m["open_interest"] = oi_data.get(cond_id, 0.0)
-                        
                         latest_prices[market_id] = price
+                        m["open_interest"] = oi_data.get(cond_id, 0.0)
 
-                        # ✅ volume guard
-                        if volume < MIN_VOLUME:
+                        # ✅ volume guard (using profile setting)
+                        if volume < MIN_VOL:
                             continue
 
                         # ✅ DUPLICATE FILTER
@@ -89,26 +90,23 @@ async def run():
                                 skipped_duplicates += 1
                                 continue
 
-                        # ✅ STORE
                         insert_market(conn, m)
 
                         # ✅ TIME SERIES
                         series = get_recent_prices(conn, market_id, limit=30)
                         if len(series) < 10:
                             continue
-                            
-                        # Fetch recent OI for trend calculation
                         oi_series = get_recent_oi(conn, market_id, limit=10)
 
-                        # ✅ FEATURES + SIGNAL
+                        # ✅ FEATURES + SIGNAL (passing profile)
                         features = build_features(series, volume, oi_series)
                         if not features:
                             continue
 
                         score = compute_score(features)
-                        signal = generate_signal(features)
+                        signal = generate_signal(features, SELECTED_RISK_PROFILE)
 
-                        # ✅ CLOB SPREAD GUARD (Only check if we actually have a signal)
+                        # ✅ CLOB SPREAD GUARD
                         if signal and clob_token_id:
                             spread_info = get_market_spread(clob_client, clob_token_id)
                             if spread_info:
@@ -123,17 +121,16 @@ async def run():
                             signals.append((score, signal, question, coin, tf))
                             processed += 1
                             
-                            # ✅ EXECUTE PAPER TRADE
-                            execute_virtual_trade(market_id, question, signal, price, coin, tf)
+                            # ✅ EXECUTE PAPER TRADE (passing sizing profile)
+                            execute_virtual_trade(market_id, question, signal, price, coin, tf, SIZING_PROFILE_NAME)
 
                     except Exception as e:
                         logger.error(f"Market processing error on {m.get('market_id')}: {e}")
                         continue
 
-            # ✅ UPDATE ACTIVE PAPER TRADES (Exit Logic)
             update_paper_trades(latest_prices)
 
-            # ✅ SORT SIGNALS
+            # SORT SIGNALS
             signals.sort(key=lambda x: x[0], reverse=True)
             for s in signals[:TOP_K]:
                 logger.info(f"[{s[3]}-{s[4]}] {s[1]} | score={round(s[0], 2)} | {s[2][:80]}")

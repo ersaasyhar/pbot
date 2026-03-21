@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 from datetime import datetime
+from app.profiles import SIZING_PROFILES
 
 # Path to virtual state
 STATE_PATH = "db/paper_portfolio.json"
@@ -16,36 +17,56 @@ def save_portfolio(data):
     with open(STATE_PATH, 'w') as f:
         json.dump(data, f, indent=4)
 
-def execute_virtual_trade(market_id, question, side, price, coin, timeframe):
+def calculate_stake(portfolio, sizing_profile_name):
     """
-    Simulates a $100 entry per signal
+    Determines how much to bet based on the sizing profile.
+    """
+    profile = SIZING_PROFILES.get(sizing_profile_name, SIZING_PROFILES["FIXED"])
+    
+    if profile["type"] == "fixed":
+        return profile["value"]
+    else:
+        # Percentage of current balance
+        return portfolio["balance"] * profile["value"]
+
+def execute_virtual_trade(market_id, question, side, price, coin, timeframe, sizing_profile="FIXED"):
+    """
+    Simulates an entry based on sizing profile
     """
     portfolio = load_portfolio()
     
-    # Check if we already have a trade open for this market
     if market_id in portfolio["active_trades"]:
         return
         
-    entry_cost = 100.0 # $100 virtual bet
+    entry_cost = calculate_stake(portfolio, sizing_profile)
+    
+    # Ensure we have enough balance
+    if entry_cost > portfolio["balance"]:
+        # print(f"⚠️ Insufficient paper balance for {question[:20]}")
+        return
+
     num_shares = entry_cost / price
     
     portfolio["active_trades"][market_id] = {
         "question": question,
         "side": side,
         "entry_price": price,
+        "entry_cost": entry_cost,
         "shares": num_shares,
         "coin": coin,
         "timeframe": timeframe,
         "entry_at": str(datetime.now())
     }
     
-    print(f"📄 PAPER TRADE: {side} {question[:40]} @ {price}")
+    # We "lock" the entry cost from the balance
+    portfolio["balance"] -= entry_cost
+    
+    print(f"📄 PAPER TRADE: {side} {question[:40]} | Stake: ${round(entry_cost, 2)} @ {price}")
     save_portfolio(portfolio)
 
 def update_paper_trades(current_prices):
     """
     Checks TP/SL for all active virtual trades
-    current_prices: dict {market_id: current_price}
     """
     portfolio = load_portfolio()
     TP = 0.05
@@ -68,14 +89,18 @@ def update_paper_trades(current_prices):
             pnl_per_share = entry - cur_price
             
         if pnl_per_share >= TP or pnl_per_share <= SL:
-            # Close trade
+            # Total payout = current value of shares
+            # If we bought YES at 0.50 and it's now 0.55, payout = shares * 0.55
+            # Simplified: total_pnl = pnl_per_share * shares
             total_pnl = pnl_per_share * trade["shares"]
+            payout = trade["entry_cost"] + total_pnl
+            
             trade["exit_price"] = cur_price
             trade["exit_at"] = str(datetime.now())
             trade["pnl"] = total_pnl
             
             portfolio["history"].append(trade)
-            portfolio["balance"] += total_pnl
+            portfolio["balance"] += payout # Return stake + profit (or minus loss)
             to_delete.append(m_id)
             closed_any = True
             

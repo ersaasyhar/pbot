@@ -10,4 +10,5 @@ dependencies = [
     "requests>=2.32.5",
     "python-dotenv>=1.0.1",
     "py-clob-client",
+    "flask>=3.0.0",
 ]
