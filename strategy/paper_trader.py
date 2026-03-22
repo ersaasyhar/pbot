@@ -2,7 +2,7 @@ import sqlite3
 import json
 import os
 from datetime import datetime
-from app.profiles import SIZING_PROFILES
+from app.config import SIZING_PROFILES
 
 # Path to virtual state
 STATE_PATH = "db/paper_portfolio.json"
@@ -18,59 +18,65 @@ def save_portfolio(data):
         json.dump(data, f, indent=4)
 
 def calculate_stake(portfolio, sizing_profile_name):
-    """
-    Determines how much to bet based on the sizing profile.
-    """
-    profile = SIZING_PROFILES.get(sizing_profile_name, SIZING_PROFILES["FIXED"])
-    
+    profile = SIZING_PROFILES.get(sizing_profile_name, SIZING_PROFILES.get("FIXED"))
     if profile["type"] == "fixed":
-        return profile["value"]
+        return float(profile["value"])
     else:
-        # Percentage of current balance
-        return portfolio["balance"] * profile["value"]
+        return round(portfolio["balance"] * profile["value"], 2)
 
 def execute_virtual_trade(market_id, question, side, price, coin, timeframe, sizing_profile="FIXED"):
     """
-    Simulates an entry based on sizing profile
+    v21: SYMMETRIC PRECISION
+    - Correctly handles BUY NO price (1.0 - price)
+    - Enforces strict safety zone (0.20 - 0.80)
     """
+    # Strict Safety Zone Check (YES price must be between 0.20 and 0.80)
+    if price < 0.20 or price > 0.80:
+        return
+
     portfolio = load_portfolio()
-    
     if market_id in portfolio["active_trades"]:
         return
         
     entry_cost = calculate_stake(portfolio, sizing_profile)
-    
-    # Ensure we have enough balance
-    if entry_cost > portfolio["balance"]:
-        # print(f"⚠️ Insufficient paper balance for {question[:20]}")
+    # MINIMUM STAKE $1.00
+    if entry_cost < 1.0 or entry_cost > portfolio["balance"]:
         return
 
-    num_shares = entry_cost / price
+    # Determine actual price of the token we are buying
+    # If side is BUY NO, we buy the NO token which costs (1.0 - YES price)
+    trade_price = price if side == "BUY YES" else round(1.0 - price, 4)
     
+    # Check for extreme liquidity risk (e.g. if NO is < 0.20)
+    if trade_price < 0.20:
+        return
+
+    num_shares = round(entry_cost / trade_price, 4)
     portfolio["active_trades"][market_id] = {
         "question": question,
         "side": side,
-        "entry_price": price,
-        "entry_cost": entry_cost,
+        "yes_price_at_entry": round(price, 4), # Store YES price for reference
+        "entry_price": round(trade_price, 4),   # Store actual token price
+        "entry_cost": round(entry_cost, 2),
         "shares": num_shares,
         "coin": coin,
         "timeframe": timeframe,
         "entry_at": str(datetime.now())
     }
     
-    # We "lock" the entry cost from the balance
-    portfolio["balance"] -= entry_cost
-    
-    print(f"📄 PAPER TRADE: {side} {question[:40]} | Stake: ${round(entry_cost, 2)} @ {price}")
+    portfolio["balance"] = round(portfolio["balance"] - entry_cost, 2)
+    print(f"📄 PAPER TRADE: {side} {question[:40]} | Stake: ${round(entry_cost, 2)} @ {trade_price}")
     save_portfolio(portfolio)
 
 def update_paper_trades(current_prices):
     """
-    Checks TP/SL for all active virtual trades
+    v21: PRECISION EXIT LOGIC
+    - Uses actual token price for PnL
+    - 15% Profit Target / 10% Stop Loss
     """
     portfolio = load_portfolio()
-    TP = 0.05
-    SL = -0.05
+    TP_PCT = 0.15
+    SL_PCT = 0.10
     
     closed_any = False
     to_delete = []
@@ -79,33 +85,38 @@ def update_paper_trades(current_prices):
         if m_id not in current_prices:
             continue
             
-        cur_price = current_prices[m_id]
+        cur_yes_price = current_prices[m_id]
+        
+        # Determine actual current price of the token we hold
+        cur_trade_price = cur_yes_price if trade["side"] == "BUY YES" else round(1.0 - cur_yes_price, 4)
+        
         entry = trade["entry_price"]
         
-        # Calculate PnL per share
-        if trade["side"] == "BUY YES":
-            pnl_per_share = cur_price - entry
-        else: # BUY NO
-            pnl_per_share = entry - cur_price
+        # Calculate true move percentage
+        move_pct = (cur_trade_price - entry) / entry
             
-        if pnl_per_share >= TP or pnl_per_share <= SL:
-            # Total payout = current value of shares
-            # If we bought YES at 0.50 and it's now 0.55, payout = shares * 0.55
-            # Simplified: total_pnl = pnl_per_share * shares
-            total_pnl = pnl_per_share * trade["shares"]
-            payout = trade["entry_cost"] + total_pnl
+        if move_pct >= TP_PCT or move_pct <= -SL_PCT:
+            # PnL is move_pct * entry_cost
+            total_pnl = round(move_pct * trade["entry_cost"], 2)
             
-            trade["exit_price"] = cur_price
+            # Cap loss at the entry cost (but since we use SL_PCT=0.10, this is unlikely)
+            total_pnl = max(total_pnl, -trade["entry_cost"])
+            
+            payout = round(trade["entry_cost"] + total_pnl, 2)
+            
+            trade["exit_price"] = round(cur_trade_price, 4)
+            trade["yes_price_at_exit"] = round(cur_yes_price, 4)
             trade["exit_at"] = str(datetime.now())
             trade["pnl"] = total_pnl
+            trade["move_pct"] = round(move_pct * 100, 2)
             
             portfolio["history"].append(trade)
-            portfolio["balance"] += payout # Return stake + profit (or minus loss)
+            portfolio["balance"] = round(portfolio["balance"] + payout, 2)
             to_delete.append(m_id)
             closed_any = True
             
             status = "💰 PROFIT" if total_pnl > 0 else "🛑 STOP"
-            print(f"📄 PAPER EXIT: {status} | PnL=${round(total_pnl, 2)} | {trade['question'][:40]}")
+            print(f"📄 PAPER EXIT: {status} | PnL=${total_pnl} ({trade['move_pct']}%)")
 
     for m_id in to_delete:
         del portfolio["active_trades"][m_id]

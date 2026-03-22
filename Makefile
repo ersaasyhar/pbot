@@ -3,8 +3,9 @@
 PYTHONPATH_EXPORT = export PYTHONPATH=.
 PID_FILE = db/bot.pid
 DASHBOARD_PID = db/dashboard.pid
+PORTFOLIO_FILE = db/paper_portfolio.json
 
-.PHONY: help run backtest stop status logs clean dashboard dashboard-stop
+.PHONY: help run backtest stop status logs clean dashboard dashboard-stop reset-portfolio
 
 help:
 	@echo "Available commands:"
@@ -16,6 +17,7 @@ help:
 	@echo "  make status         - Check if bot & dashboard are running"
 	@echo "  make logs           - View the latest bot logs"
 	@echo "  make clean          - Remove logs and temp files"
+	@echo "  make reset-portfolio - Reset virtual balance to $1000 and clear trades"
 
 run: stop
 	@echo "🚀 Starting Polymarket Bot..."
@@ -51,6 +53,13 @@ stop:
 		echo "ℹ️ No bot PID file found. Cleaning up any orphaned processes..."; \
 		pkill -f "[u]v run -m app.main" || true; \
 	fi
+
+reset-portfolio: stop dashboard-stop
+	@echo "🗑️ Resetting Paper Portfolio..."
+	@rm -f $(PORTFOLIO_FILE)
+	@echo "✅ Portfolio deleted. Starting fresh bot..."
+	@$(MAKE) --no-print-directory run
+	@$(MAKE) --no-print-directory dashboard
 
 status:
 	@if [ -f $(PID_FILE) ] && ps -p $$(cat $(PID_FILE)) > /dev/null; then echo "🟢 Bot: RUNNING"; else echo "🔴 Bot: STOPPED"; fi

@@ -11,4 +11,5 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "py-clob-client",
     "flask>=3.0.0",
+    "websockets>=12.0",
 ]

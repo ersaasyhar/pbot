@@ -1,19 +1,28 @@
 import sqlite3
+import os
 from features.builder import build_features
 from strategy.signal import generate_signal
 from backtest.simulator import Trade
 from data.storage import DB_PATH
+from app.config import RISK_PROFILES, SELECTED_RISK_PROFILE_NAME
 
+# Use the same unified profile as the live bot
+PROFILE_NAME = SELECTED_RISK_PROFILE_NAME
 TP = 0.05
 SL = -0.05
 
 def backtest():
+    print(f"📈 Running Backtest using {PROFILE_NAME} profile (Unified Config)...")
+    profile = RISK_PROFILES.get(PROFILE_NAME, RISK_PROFILES.get("BALANCED"))
 
-    # Using the live DB_PATH from storage.py (which is now v4)
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # ✅ FIXED: also select market_id
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='market_prices'")
+    if not cur.fetchone():
+        print("❌ No data found in database.")
+        return
+
     cur.execute("""
         SELECT market_id, question, price, timestamp
         FROM market_prices
@@ -21,72 +30,48 @@ def backtest():
     """)
 
     data = cur.fetchall()
+    if not data:
+        print("❌ Database is empty.")
+        return
 
     history = {}
     trades = []
-    active_trades = {} # ✅ Track active trade PER market
+    active_trades = {}
     pnl_total = 0
 
     for row in data:
         market_id, question, price, ts = row
-
-        if market_id not in history:
-            history[market_id] = []
-
+        if market_id not in history: history[market_id] = []
         history[market_id].append(price)
-
         series = history[market_id][-30:]
 
-        features = build_features(series, volume=1000)
+        features = build_features(series, volume=1000, oi_series=None)
+        if not features: continue
 
-        if not features:
-            continue
-
-        # ENTRY logic per market
+        # ENTRY
         if market_id not in active_trades:
-            signal = generate_signal(features)
-
+            signal = generate_signal(features, profile)
             if signal:
                 active_trades[market_id] = Trade(signal, price)
-                print(f"🚀 ENTRY [{signal}] | {question[:40]} | price={price}")
 
-
-        # EXIT logic per market
+        # EXIT
         if market_id in active_trades:
             trade = active_trades[market_id]
             pnl = trade.pnl(price)
-
             if pnl >= TP or pnl <= SL:
                 pnl_total += pnl
                 trades.append(pnl)
                 del active_trades[market_id]
-                status = "💰 PROFIT" if pnl > 0 else "🛑 STOP"
-                print(f"{status} | PnL={round(pnl, 4)} | {question[:40]}")
 
     print("\n" + "="*40)
-    print("BACKTEST RESULTS")
+    print(f"BACKTEST RESULTS ({PROFILE_NAME})")
     print("="*40)
     print(f"Closed PnL: {round(pnl_total, 4)}")
     print(f"Closed Trades: {len(trades)}")
     
-    if active_trades:
-        print("\n--- OPEN TRADES ---")
-        unrealized_pnl = 0
-        for m_id, trade in active_trades.items():
-            # Get the very last price we have for this market
-            current_p = history[m_id][-1]
-            pnl = trade.pnl(current_p)
-            unrealized_pnl += pnl
-            print(f"RUNNING | PnL={round(pnl, 4)} | Entry={trade.entry} | Cur={current_p}")
-        print(f"Total Unrealized PnL: {round(unrealized_pnl, 4)}")
-        print(f"COMBINED PNL: {round(pnl_total + unrealized_pnl, 4)}")
-
     if trades:
         winrate = sum(1 for t in trades if t > 0) / len(trades)
-        avg_pnl = sum(trades) / len(trades)
-        print(f"\nWin Rate (Closed): {round(winrate * 100, 2)}%")
-    else:
-        print("\nWin Rate (Closed): 0%")
+        print(f"Win Rate (Closed): {round(winrate * 100, 2)}%")
 
 if __name__ == "__main__":
     backtest()

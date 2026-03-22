@@ -2,6 +2,7 @@ from flask import Flask, render_template, jsonify, request, redirect, session, u
 import json
 import os
 from dotenv import load_dotenv
+from app.config import SELECTED_RISK_PROFILE_NAME
 
 load_dotenv()
 
@@ -15,12 +16,38 @@ def get_data():
     if not os.path.exists(PORTFOLIO_PATH):
         return {"balance": 1000.0, "active_trades": {}, "history": []}
     with open(PORTFOLIO_PATH, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+    
+    # Calculate Metrics
+    history = data.get("history", [])
+    active = data.get("active_trades", {})
+    
+    wins = [t for t in history if t.get("pnl", 0) > 0]
+    losses = [t for t in history if t.get("pnl", 0) <= 0]
+    
+    total_pnl = sum(t.get("pnl", 0) for t in history)
+    initial_balance = 1000.0
+    roi = (total_pnl / initial_balance) * 100
+    
+    win_rate = (len(wins) / len(history) * 100) if history else 0
+    
+    metrics = {
+        "total_pnl": round(total_pnl, 2),
+        "roi": round(roi, 2),
+        "win_rate": round(win_rate, 1),
+        "total_trades": len(history) + len(active),
+        "closed_count": len(history),
+        "active_count": len(active),
+        "wins": len(wins),
+        "losses": len(losses),
+        "risk_profile": SELECTED_RISK_PROFILE_NAME
+    }
+    
+    data["metrics"] = metrics
+    return data
 
-# --- AUTH PROTECTOR ---
 @app.before_request
 def require_login():
-    # List of endpoints that DON'T require a password
     allowed_routes = ["login", "static"]
     if "logged_in" not in session and request.endpoint not in allowed_routes:
         return redirect(url_for("login"))
@@ -33,7 +60,7 @@ def login():
             session["logged_in"] = True
             return redirect(url_for("index"))
         else:
-            error = "Invalid password. Access denied."
+            error = "Invalid password."
     return render_template("login.html", error=error)
 
 @app.route("/logout")

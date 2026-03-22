@@ -5,15 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Polymarket Bot Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <meta http-equiv="refresh" content="30"> <!-- Auto-refresh every 30s -->
+    <meta http-equiv="refresh" content="30">
 </head>
 <body class="bg-gray-900 text-white font-sans">
     <div class="container mx-auto px-4 py-8">
         <!-- Header -->
-        <div class="flex justify-between items-center mb-10 border-b border-gray-700 pb-6">
+        <div class="flex justify-between items-center mb-8 border-b border-gray-700 pb-6">
             <div>
                 <h1 class="text-3xl font-bold text-blue-400">🤖 Polymarket Bot Terminal</h1>
-                <a href="/logout" class="text-xs text-gray-500 hover:text-red-400 transition underline">Secure Logout</a>
+                <div class="flex items-center space-x-4 mt-1">
+                    <span class="text-xs font-bold px-2 py-0.5 rounded bg-gray-700 text-gray-300">Profile: {{ data.metrics.risk_profile }}</span>
+                    <a href="/logout" class="text-xs text-gray-500 hover:text-red-400 transition underline">Secure Logout</a>
+                </div>
             </div>
             <div class="text-right">
                 <p class="text-gray-400 text-sm">Virtual Balance</p>
@@ -21,11 +24,34 @@
             </div>
         </div>
 
+        <!-- Metrics Grid -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+            <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                <p class="text-gray-500 text-xs uppercase font-bold mb-1">Total PnL</p>
+                <p class="text-2xl font-mono {{ 'text-green-400' if data.metrics.total_pnl >= 0 else 'text-red-400' }}">
+                    {{ '+' if data.metrics.total_pnl > 0 }}${{ data.metrics.total_pnl }}
+                </p>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                <p class="text-gray-500 text-xs uppercase font-bold mb-1">Win Rate</p>
+                <p class="text-2xl font-mono text-blue-400">{{ data.metrics.win_rate }}%</p>
+                <p class="text-[10px] text-gray-500">{{ data.metrics.wins }}W - {{ data.metrics.losses }}L</p>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                <p class="text-gray-500 text-xs uppercase font-bold mb-1">Total ROI</p>
+                <p class="text-2xl font-mono text-purple-400">{{ data.metrics.roi }}%</p>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                <p class="text-gray-500 text-xs uppercase font-bold mb-1">Active Trades</p>
+                <p class="text-2xl font-mono text-yellow-400">{{ data.metrics.active_count }}</p>
+            </div>
+        </div>
+
         <!-- Active Trades -->
         <div class="mb-10">
             <h2 class="text-xl font-semibold mb-4 flex items-center">
                 <span class="w-3 h-3 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-                Active Positions ({{ data.active_trades|length }})
+                Active Positions ({{ data.metrics.active_count }} / {{ data.metrics.total_trades }})
             </h2>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {% for m_id, trade in data.active_trades.items() %}
@@ -45,6 +71,7 @@
                             <p class="font-bold {{ 'text-green-400' if trade.side == 'BUY YES' else 'text-red-400' }}">{{ trade.side }}</p>
                         </div>
                     </div>
+                    <div class="mt-2 text-[10px] text-gray-600 font-mono">Opened: {{ trade.entry_at.split('.')[0] }}</div>
                 </div>
                 {% endfor %}
                 {% if not data.active_trades %}
@@ -62,9 +89,9 @@
                 <table class="w-full text-left">
                     <thead class="bg-gray-700 text-gray-300 text-xs uppercase">
                         <tr>
-                            <th class="px-6 py-3">Market</th>
+                            <th class="px-6 py-3">Market / Time</th>
                             <th class="px-6 py-3">Side</th>
-                            <th class="px-6 py-3">Entry/Exit</th>
+                            <th class="px-6 py-3">Price Action</th>
                             <th class="px-6 py-3 text-right">PnL</th>
                         </tr>
                     </thead>
@@ -73,7 +100,10 @@
                         <tr class="hover:bg-gray-750 transition text-sm">
                             <td class="px-6 py-4">
                                 <p class="font-medium truncate w-64">{{ trade.question }}</p>
-                                <p class="text-xs text-gray-500">{{ trade.coin|upper }} ({{ trade.timeframe }})</p>
+                                <div class="flex space-x-2 text-[10px] text-gray-500 font-mono mt-1">
+                                    <span>IN: {{ trade.entry_at.split()[1].split('.')[0] if ' ' in trade.entry_at else trade.entry_at }}</span>
+                                    <span>OUT: {{ trade.exit_at.split()[1].split('.')[0] if ' ' in trade.exit_at else trade.exit_at }}</span>
+                                </div>
                             </td>
                             <td class="px-6 py-4">
                                 <span class="font-semibold {{ 'text-green-400' if trade.side == 'BUY YES' else 'text-red-400' }}">{{ trade.side }}</span>

@@ -2,10 +2,11 @@ import asyncio
 import aiohttp
 import time
 import json
+from app.config import ACTIVE_COINS
 
 BASE_URL = "https://gamma-api.polymarket.com"
 
-COINS = ["btc", "eth", "sol", "doge", "bnb", "xrp"]
+COINS = ACTIVE_COINS
 TIMEFRAMES = {
     "5m": 300,
     "15m": 900,
@@ -60,7 +61,7 @@ async def fetch_event(session, coin, tf, slug):
 # ---------------------------
 # PARSE MARKET
 # ---------------------------
-def parse_market(event, coin, timeframe):
+def parse_market(event, coin, timeframe, tf_seconds):
     markets = []
     for m in event.get("markets", []):
         if not m.get("active") or m.get("closed"):
@@ -90,6 +91,21 @@ def parse_market(event, coin, timeframe):
             except:
                 pass
 
+        # Calculate End Time from Slug / Event
+        # UpDown markets in Polymarket use fixed windows.
+        # We can estimate end_time = start_epoch + tf_seconds
+        # But even better, Gamma events have an 'endDate' field (ISO format).
+        end_time_str = event.get("endDate")
+        end_time = 0
+        if end_time_str:
+            try:
+                # ISO to Epoch
+                from datetime import datetime
+                dt = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
+                end_time = int(dt.timestamp())
+            except:
+                pass
+
         markets.append({
             "market_id": str(m.get("id")),
             "condition_id": m.get("conditionId"),
@@ -99,6 +115,7 @@ def parse_market(event, coin, timeframe):
             "volume": float(m.get("volumeNum") or 0),
             "coin": coin,
             "timeframe": timeframe,
+            "end_time": end_time,
             "timestamp": int(time.time())
         })
     return markets
@@ -112,7 +129,11 @@ async def fetch_markets_async():
     candidates = generate_candidate_slugs()
 
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_event(session, coin, tf, slug) for coin, tf, slug in candidates]
+        # We need tf_seconds to pass to parse_market
+        tasks = []
+        for coin, tf, slug in candidates:
+            tasks.append(fetch_event(session, coin, tf, slug))
+            
         results = await asyncio.gather(*tasks)
 
         for result in results:
@@ -121,7 +142,8 @@ async def fetch_markets_async():
             key = f"{coin}-{tf}"
             if key in seen: continue
 
-            markets = parse_market(event, coin, tf)
+            tf_seconds = TIMEFRAMES.get(tf, 300)
+            markets = parse_market(event, coin, tf, tf_seconds)
             if markets:
                 all_markets.extend(markets)
                 seen.add(key)

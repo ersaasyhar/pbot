@@ -1,60 +1,56 @@
 # 🤖 Polymarket Trading Bot: Project Guide
 
-This project is a high-frequency trading bot designed for Polymarket crypto "Up/Down" events. It uses institutional-grade technical analysis, real-time orderbook safety guards, and a secure web dashboard.
+This project is a professional high-frequency trading bot designed for Polymarket crypto "Up/Down" events. It features a real-time WebSocket streamer, a symmetric signal engine, and a secure analytics terminal.
 
-📜 **Sequential Summary of Development**
-
-*   **Version 1-8:** Foundation, RSI/Z-Score integration, and Major Trend filtering.
-*   **Version 9-10:** CLOB Spread Guard and Open Interest (OI) conviction filtering.
-*   **Version 11:** Multi-Profile Risk (Conservative/Balanced/Aggressive) and sizing.
-*   **Version 12 (Current):** Secure Live Dashboard & Nginx Deployment.
-    *   **Dashboard:** Real-time Tailwind CSS UI to monitor balance, active trades, and history.
-    *   **Security:** Session-based password protection and encrypted cookies.
-    *   **Deployment:** Nginx reverse proxy integration for EC2 production environments.
+📜 **Development Evolution**
+*   **Version 1-16:** REST-based polling, RSI/Z-Score, and CLOB Spread Guard.
+*   **Version 18:** WebSocket Streamer (~800 updates per second).
+*   **Version 19:** The Safety Zone (Ignoring tokens < $0.15 to avoid high-slippage traps).
+*   **Version 20 (Current):** The Precision Guard.
+    *   **Symmetric Strategy:** Full support for both **BUY YES** and **BUY NO** signals.
+    *   **Percentage-Based Exits:** Switched to **15% Take Profit / 10% Stop Loss** for consistent risk management.
+    *   **Mathematical Protection:** Hard caps on PnL to prevent losses from exceeding the initial entry cost.
 
 ---
 
 ### 🛠 Tools & Technologies
 - **Language:** Python 3.12+ (uv manager)
-- **Web Engine:** Flask (Dashboard API & UI)
-- **Deployment:** Nginx (Reverse Proxy)
-- **Database:** SQLite (History) & JSON (Real-time Portfolio)
-- **APIs:** Gamma, CLOB (Orderbook), Data (Open Interest)
+- **Web Engine:** Flask (Secure Terminal UI + Tailwind CSS)
+- **Networking:** `websockets` (Real-time CLOB market stream)
+- **Database:** SQLite (Price history) & JSON (Virtual Portfolio)
+- **APIs:** Gamma (Discovery), CLOB (Execution), Data (Conviction)
 
 ### 📂 Directory Structure
-- **`app/`**: Entry point, **Web Dashboard**, and Profiles.
-- **`core/`**: The async engine loop (The "Heart").
-- **`data/`**: Multi-API Clients and Storage.
-- **`strategy/`**: Signal logic and **Paper Trading** module.
-- **`db/`**: Persistent storage (SQLite, JSON Portfolio, PID files).
+- **`config.json`**: **Master Control.** Switch Risk Profiles and Bet Sizes here.
+- **`app/`**: Dashboard API, UI Templates, and Config Loader.
+- **`core/`**: The high-speed async engine (WebSocket handler).
+- **`strategy/`**: Symmetric Signal logic and Paper Trading module.
+- **`features/`**: Real-time indicator building (RSI, Z-Score, Trend).
+- **`db/`**: Price history, trade history, and PID management.
 
 ### 🚀 Quick Start
-1.  **Configure**: Fill in `.env` (API Keys, `DASHBOARD_PASSWORD`, `FLASK_SECRET_KEY`).
-2.  **Start Bot**: `make run`
+1.  **Configure**: Fill in `.env` (API Keys) and `config.json` (Risk Profile).
+2.  **Run Bot**: `make run`
 3.  **Start Dashboard**: `make dashboard`
-4.  **Access UI**: Visit `http://<your-ec2-ip>` (Ensure Port 80 is open in AWS Security Groups).
+4.  **Terminal**: Visit `http://<your-ec2-ip>/localhost:5000` (Uses `DASHBOARD_PASSWORD` from `.env`).
 
-### 📈 Monitoring & Maintenance
-- **Dashboard**: `make dashboard` (Check port 5000/80)
-- **Live Logs**: `make logs`
-- **Backtest**: `make backtest`
-- **Status**: `make status`
+### 📈 Maintenance & Commands
+- **Check Status**: `make status`
+- **Reset Portfolio**: `make reset-portfolio` (Wipes history and returns balance to $1,000)
+- **Backtest**: `make backtest` (Matched to your current `config.json` profile)
+- **Watch Logs**: `make logs`
 
 ---
 
-### ⚙️ Risk & Sizing Profiles
-Adjust these in your `.env` to change how the bot behaves:
+### 🧠 Trading Terminology (v20)
+*   **Price**: The **CLOB Midpoint** `(Bid+Ask)/2`. 
+*   **Safety Zone**: The bot only trades tokens between **$0.15 and $0.85**. Outside this range, liquidity is too low for safe trading.
+*   **Symmetric Trading**: The bot can profit from both up-trends (BUY YES) and market crashes (BUY NO).
+*   **Active / Total**: Displayed on the dashboard to show current exposure vs total trade volume.
 
-| Profile | Strategy Stance | Thresholds |
-| :--- | :--- | :--- |
-| **Conservative** | Safety First | Z-Score 1.5, High Volume, Tight Spread |
-| **Balanced** | Growth | Z-Score 1.2, Med Volume, Med Spread |
-| **Aggressive** | High Frequency | Z-Score 0.8, Low Volume, Wide Spread |
-
-*   **SIZING_PROFILE**: Set to `FIXED` ($100) or `PERCENTAGE` (5% of balance).
-
-### 🛡 Security Requirements
-To keep your bot private on the public internet:
-1.  **AWS Security Group**: Open Port 80 (HTTP) and Port 22 (SSH).
-2.  **Dashboard Lock**: Access is restricted via the password set in your `.env`.
-3.  **Nginx**: Handles traffic routing from the web to the internal Flask server.
+### ⚙️ Risk Profiles (`config.json`)
+| Profile | Stance | Z-Score | RSI Range | Min Volume |
+| :--- | :--- | :--- | :--- | :--- |
+| **Conservative** | Safety | 1.5 | 55 - 85 | $2,000 |
+| **Balanced** | Growth | 1.2 | 45 - 85 | $500 |
+| **Aggressive** | Fast | 0.8 | 35 - 90 | $100 |
