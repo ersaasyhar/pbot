@@ -3,6 +3,7 @@ import asyncio
 
 DATA_API_URL = "https://data-api.polymarket.com"
 
+
 async def fetch_open_interest_batch(condition_ids):
     """
     Fetches Open Interest for multiple condition_ids in a single session.
@@ -10,14 +11,14 @@ async def fetch_open_interest_batch(condition_ids):
     """
     if not condition_ids:
         return {}
-        
+
     results = {}
     url = f"{DATA_API_URL}/oi"
-    
+
     # Polymarket Data API /oi accepts a single 'market' param or multiple
     # Based on search, we might need to call it per ID or see if it accepts comma-sep
     # Let's try comma-separated first, if not, we gather.
-    
+
     async with aiohttp.ClientSession() as session:
         # To be safe and efficient, we'll fetch them in parallel
         async def fetch_one(cid):
@@ -35,5 +36,5 @@ async def fetch_open_interest_batch(condition_ids):
         completed = await asyncio.gather(*tasks)
         for cid, val in completed:
             results[cid] = val
-            
+
     return results

@@ -22,27 +22,33 @@ class Database:
 
     # ✅ Get last price for deduplication
     def get_last_price(self, market_id):
-        cur = self.conn.execute("""
+        cur = self.conn.execute(
+            """
             SELECT price FROM market_prices
             WHERE market_id = ?
             ORDER BY timestamp DESC
             LIMIT 1
-        """, (market_id,))
+        """,
+            (market_id,),
+        )
         row = cur.fetchone()
         return dict(row) if row else None
 
     # ✅ Insert new price row
     def insert_price(self, market):
-        self.conn.execute("""
+        self.conn.execute(
+            """
             INSERT INTO market_prices (market_id, question, price, volume, timestamp)
             VALUES (?, ?, ?, ?, ?)
-        """, (
-            market["market_id"],
-            market["question"],
-            market["price"],
-            market["volume"],
-            market["timestamp"]
-        ))
+        """,
+            (
+                market["market_id"],
+                market["question"],
+                market["price"],
+                market["volume"],
+                market["timestamp"],
+            ),
+        )
         self.conn.commit()
 
     # ✅ THIS is the block you asked about

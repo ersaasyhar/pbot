@@ -16,12 +16,14 @@ TIMEFRAMES = {
 
 MAX_RETRIES = 3
 
+
 # ---------------------------
 # TIME HELPERS
 # ---------------------------
 def get_epoch(tf_seconds):
     now = int(time.time())
     return now - (now % tf_seconds)
+
 
 # ---------------------------
 # SLUG GENERATION
@@ -36,6 +38,7 @@ def generate_candidate_slugs():
             candidates.append((coin, tf, f"{coin}-updown-{tf}-{prev_epoch}"))
     return candidates
 
+
 # ---------------------------
 # ASYNC REQUEST WITH RETRY
 # ---------------------------
@@ -49,6 +52,7 @@ async def safe_get(session, url, params):
             await asyncio.sleep(1)
     return None
 
+
 # ---------------------------
 # FETCH SINGLE EVENT
 # ---------------------------
@@ -57,6 +61,7 @@ async def fetch_event(session, coin, tf, slug):
     if not data or not isinstance(data, list) or len(data) == 0:
         return None
     return (coin, tf, data[0])
+
 
 # ---------------------------
 # PARSE MARKET
@@ -71,11 +76,15 @@ def parse_market(event, coin, timeframe, tf_seconds):
         if not price:
             op = m.get("outcomePrices")
             if isinstance(op, str):
-                try: op = json.loads(op)
-                except: op = None
+                try:
+                    op = json.loads(op)
+                except:
+                    op = None
             if isinstance(op, list) and len(op) > 0:
-                try: price = float(op[0])
-                except: price = None
+                try:
+                    price = float(op[0])
+                except:
+                    price = None
 
         if price is None or price <= 0 or price > 1:
             continue
@@ -101,24 +110,28 @@ def parse_market(event, coin, timeframe, tf_seconds):
             try:
                 # ISO to Epoch
                 from datetime import datetime
+
                 dt = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
                 end_time = int(dt.timestamp())
             except:
                 pass
 
-        markets.append({
-            "market_id": str(m.get("id")),
-            "condition_id": m.get("conditionId"),
-            "clob_token_id": clob_token_id,
-            "question": m.get("question", f"{coin.upper()} {timeframe}"),
-            "price": float(price),
-            "volume": float(m.get("volumeNum") or 0),
-            "coin": coin,
-            "timeframe": timeframe,
-            "end_time": end_time,
-            "timestamp": int(time.time())
-        })
+        markets.append(
+            {
+                "market_id": str(m.get("id")),
+                "condition_id": m.get("conditionId"),
+                "clob_token_id": clob_token_id,
+                "question": m.get("question", f"{coin.upper()} {timeframe}"),
+                "price": float(price),
+                "volume": float(m.get("volumeNum") or 0),
+                "coin": coin,
+                "timeframe": timeframe,
+                "end_time": end_time,
+                "timestamp": int(time.time()),
+            }
+        )
     return markets
+
 
 # ---------------------------
 # MAIN ASYNC FETCHER
@@ -133,14 +146,16 @@ async def fetch_markets_async():
         tasks = []
         for coin, tf, slug in candidates:
             tasks.append(fetch_event(session, coin, tf, slug))
-            
+
         results = await asyncio.gather(*tasks)
 
         for result in results:
-            if not result: continue
+            if not result:
+                continue
             coin, tf, event = result
             key = f"{coin}-{tf}"
-            if key in seen: continue
+            if key in seen:
+                continue
 
             tf_seconds = TIMEFRAMES.get(tf, 300)
             markets = parse_market(event, coin, tf, tf_seconds)
@@ -151,7 +166,10 @@ async def fetch_markets_async():
     all_markets.sort(key=lambda x: x["volume"], reverse=True)
     return all_markets
 
+
 if __name__ == "__main__":
     res = asyncio.run(fetch_markets_async())
     for m in res:
-        print(f"[{m['coin']}-{m['timeframe']}] {m['price']} | Vol: {m['volume']} | {m['question']}")
+        print(
+            f"[{m['coin']}-{m['timeframe']}] {m['price']} | Vol: {m['volume']} | {m['question']}"
+        )

@@ -2,15 +2,28 @@
     "bot": {
         "fetch_interval": 3,
         "top_k": 10,
-        "active_coins": ["btc", "eth", "sol", "doge", "bnb", "xrp"]
+        "active_coins": [
+            "btc",
+            "eth",
+            "sol",
+            "doge",
+            "bnb",
+            "xrp"
+        ]
     },
     "risk_profiles": {
-        "SELECTED": "CONSERVATIVE",
+        "SELECTED": "BALANCED",
         "CONSERVATIVE": {
             "z_score_threshold": 1.5,
             "rsi_min": 55,
             "rsi_max": 85,
             "max_spread": 0.03,
+            "min_depth_top5": 400,
+            "min_effective_ev": 0.04,
+            "max_recent_move_pct": 0.05,
+            "max_signal_age_sec": 60,
+            "signal_decay_lambda": 0.03,
+            "max_entries_per_cycle": 2,
             "min_oi_trend": -0.01,
             "min_volume": 2000
         },
@@ -18,7 +31,13 @@
             "z_score_threshold": 1.2,
             "rsi_min": 45,
             "rsi_max": 85,
-            "max_spread": 0.05,
+            "max_spread": 0.06,
+            "min_depth_top5": 100,
+            "min_effective_ev": 0.0,
+            "max_recent_move_pct": 0.09,
+            "max_signal_age_sec": 60,
+            "signal_decay_lambda": 0.005,
+            "max_entries_per_cycle": 2,
             "min_oi_trend": -0.02,
             "min_volume": 500
         },
@@ -27,6 +46,12 @@
             "rsi_min": 35,
             "rsi_max": 90,
             "max_spread": 0.08,
+            "min_depth_top5": 120,
+            "min_effective_ev": 0.02,
+            "max_recent_move_pct": 0.08,
+            "max_signal_age_sec": 75,
+            "signal_decay_lambda": 0.015,
+            "max_entries_per_cycle": 4,
             "min_oi_trend": -0.05,
             "min_volume": 100
         }

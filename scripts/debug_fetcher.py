@@ -1,6 +1,6 @@
 import asyncio
-import aiohttp
 from data.fetcher import fetch_markets_async
+
 
 async def main():
     markets = await fetch_markets_async()
@@ -9,6 +9,7 @@ async def main():
         print(markets[0].keys())
         print("\nFull first market object:")
         print(markets[0])
+
 
 if __name__ == "__main__":
     asyncio.run(main())

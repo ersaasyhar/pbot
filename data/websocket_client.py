@@ -7,6 +7,7 @@ logger = get_logger()
 
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
+
 class PolymarketWS:
     def __init__(self):
         self.uri = WS_URL
@@ -25,17 +26,21 @@ class PolymarketWS:
         while True:
             try:
                 logger.info(f"Connecting to WS: {self.uri}")
-                async with websockets.connect(self.uri, additional_headers=headers, ping_interval=None) as ws:
+                async with websockets.connect(
+                    self.uri, additional_headers=headers, ping_interval=None
+                ) as ws:
                     self.ws = ws
-                    
+
                     # 1. IMMEDIATE SUBSCRIPTION (Rule #1 in docs)
                     sub_msg = {
                         "type": "market",
                         "assets_ids": [str(t) for t in self.initial_tokens],
-                        "custom_feature_enabled": True
+                        "custom_feature_enabled": True,
                     }
                     await self.ws.send(json.dumps(sub_msg))
-                    logger.info(f"WS: Immediate subscription sent for {len(self.initial_tokens)} tokens.")
+                    logger.info(
+                        f"WS: Immediate subscription sent for {len(self.initial_tokens)} tokens."
+                    )
 
                     # 2. START HEARTBEAT (Rule #2 in docs)
                     heartbeat_task = asyncio.create_task(self.heartbeat_loop())
@@ -43,12 +48,14 @@ class PolymarketWS:
                     # 3. LISTEN LOOP
                     while True:
                         message = await self.ws.recv()
-                        if message == "PONG": continue
-                        
+                        if message == "PONG":
+                            continue
+
                         try:
                             data = json.loads(message)
-                            if data.get("type") == "subscription_success": continue
-                            
+                            if data.get("type") == "subscription_success":
+                                continue
+
                             events = data if isinstance(data, list) else [data]
                             for ev in events:
                                 if isinstance(ev, dict):
@@ -77,8 +84,8 @@ class PolymarketWS:
             msg = {
                 "operation": "subscribe",
                 "assets_ids": [str(t) for t in new_tokens],
-                "type": "market", # Some versions require type even on update
-                "custom_feature_enabled": True
+                "type": "market",  # Some versions require type even on update
+                "custom_feature_enabled": True,
             }
             await self.ws.send(json.dumps(msg))
             logger.info(f"WS: Dynamically subscribed to {len(new_tokens)} new tokens.")

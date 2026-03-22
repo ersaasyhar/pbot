@@ -1,10 +1,11 @@
 import logging
 import sys
 
+
 def get_logger():
     # Use standard logging config
     logger = logging.getLogger("scanner")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     # Prevent duplicate handlers if called multiple times
     if not logger.handlers:
@@ -14,10 +15,5 @@ def get_logger():
         ch = logging.StreamHandler(sys.stdout)
         ch.setFormatter(formatter)
         logger.addHandler(ch)
-
-        # File Handler
-        fh = logging.FileHandler("collector.log")
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
 
     return logger

@@ -3,15 +3,17 @@ import os
 
 CONFIG_PATH = "config.json"
 
+
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         return {
             "bot": {"fetch_interval": 5, "top_k": 10, "active_coins": ["btc", "eth"]},
             "risk_profiles": {"SELECTED": "BALANCED"},
-            "sizing_profiles": {"SELECTED": "FIXED"}
+            "sizing_profiles": {"SELECTED": "FIXED"},
         }
     with open(CONFIG_PATH, "r") as f:
         return json.load(f)
+
 
 _raw_config = load_config()
 
@@ -19,7 +21,9 @@ _raw_config = load_config()
 BOT_CONFIG = _raw_config.get("bot", {})
 FETCH_INTERVAL = BOT_CONFIG.get("fetch_interval", 5)
 TOP_K = BOT_CONFIG.get("top_k", 10)
-ACTIVE_COINS = BOT_CONFIG.get("active_coins", ["btc", "eth", "sol", "doge", "bnb", "xrp"])
+ACTIVE_COINS = BOT_CONFIG.get(
+    "active_coins", ["btc", "eth", "sol", "doge", "bnb", "xrp"]
+)
 
 # --- Export Profiles ---
 RISK_PROFILES = _raw_config.get("risk_profiles", {})

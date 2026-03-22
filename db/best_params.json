@@ -1,0 +1,84 @@
+{
+  "profile": "BALANCED",
+  "rows_used": 20000,
+  "best": {
+    "min_effective_ev": 0.0,
+    "signal_decay_lambda": 0.005,
+    "max_signal_age_sec": 60,
+    "max_entries_per_cycle": 2,
+    "opened": 1,
+    "trades": 1,
+    "win_rate": 0.0,
+    "expectancy": -0.028169014084507067,
+    "profit_factor": 0.0,
+    "total_pnl": -0.028169014084507067,
+    "score": -0.028169014084507067
+  },
+  "top": [
+    {
+      "min_effective_ev": 0.0,
+      "signal_decay_lambda": 0.005,
+      "max_signal_age_sec": 60,
+      "max_entries_per_cycle": 2,
+      "opened": 1,
+      "trades": 1,
+      "win_rate": 0.0,
+      "expectancy": -0.028169014084507067,
+      "profit_factor": 0.0,
+      "total_pnl": -0.028169014084507067,
+      "score": -0.028169014084507067
+    },
+    {
+      "min_effective_ev": 0.0,
+      "signal_decay_lambda": 0.005,
+      "max_signal_age_sec": 60,
+      "max_entries_per_cycle": 3,
+      "opened": 1,
+      "trades": 1,
+      "win_rate": 0.0,
+      "expectancy": -0.028169014084507067,
+      "profit_factor": 0.0,
+      "total_pnl": -0.028169014084507067,
+      "score": -0.028169014084507067
+    },
+    {
+      "min_effective_ev": 0.0,
+      "signal_decay_lambda": 0.005,
+      "max_signal_age_sec": 90,
+      "max_entries_per_cycle": 2,
+      "opened": 1,
+      "trades": 1,
+      "win_rate": 0.0,
+      "expectancy": -0.028169014084507067,
+      "profit_factor": 0.0,
+      "total_pnl": -0.028169014084507067,
+      "score": -0.028169014084507067
+    },
+    {
+      "min_effective_ev": 0.0,
+      "signal_decay_lambda": 0.005,
+      "max_signal_age_sec": 90,
+      "max_entries_per_cycle": 3,
+      "opened": 1,
+      "trades": 1,
+      "win_rate": 0.0,
+      "expectancy": -0.028169014084507067,
+      "profit_factor": 0.0,
+      "total_pnl": -0.028169014084507067,
+      "score": -0.028169014084507067
+    },
+    {
+      "min_effective_ev": 0.0,
+      "signal_decay_lambda": 0.01,
+      "max_signal_age_sec": 60,
+      "max_entries_per_cycle": 2,
+      "opened": 1,
+      "trades": 1,
+      "win_rate": 0.0,
+      "expectancy": -0.028169014084507067,
+      "profit_factor": 0.0,
+      "total_pnl": -0.028169014084507067,
+      "score": -0.028169014084507067
+    }
+  ]
+}
