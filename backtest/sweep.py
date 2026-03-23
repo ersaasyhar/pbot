@@ -3,8 +3,9 @@ import itertools
 import math
 import sqlite3
 import json
+from pathlib import Path
 
-from app.config import RISK_PROFILES, SELECTED_RISK_PROFILE_NAME
+from app.config import RISK_PROFILES, SELECTED_RISK_PROFILE_NAME, CONFIG_PATH
 from data.storage import DB_PATH
 from features.builder import build_features
 from strategy.signal import generate_mean_reversion_signal, generate_trend_signal
@@ -24,8 +25,8 @@ ASSUMED_SPREAD_BY_TF = {
     "1h": 0.02,
     "4h": 0.018,
 }
-DEFAULT_BEST_PARAMS_PATH = "db/best_params.json"
-CONFIG_PATH = "config.json"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_BEST_PARAMS_PATH = str(PROJECT_ROOT / "db" / "best_params.json")
 
 
 def detect_regime(features, timeframe):
@@ -253,12 +254,17 @@ def parse_int_list(raw):
 
 
 def save_best_params(path, payload):
-    with open(path, "w") as f:
+    target = Path(path)
+    if not target.is_absolute():
+        target = PROJECT_ROOT / target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w") as f:
         json.dump(payload, f, indent=2)
 
 
 def apply_best_to_config(best, profile_name):
-    with open(CONFIG_PATH, "r") as f:
+    cfg_path = Path(CONFIG_PATH)
+    with cfg_path.open("r") as f:
         cfg = json.load(f)
 
     risk_profiles = cfg.get("risk_profiles", {})
@@ -270,7 +276,7 @@ def apply_best_to_config(best, profile_name):
     risk_profiles[profile_name]["max_signal_age_sec"] = best["max_signal_age_sec"]
     risk_profiles[profile_name]["max_entries_per_cycle"] = best["max_entries_per_cycle"]
 
-    with open(CONFIG_PATH, "w") as f:
+    with cfg_path.open("w") as f:
         json.dump(cfg, f, indent=4)
 
 

@@ -65,7 +65,7 @@ def get_recent_prices(conn, market_id, limit=20):
         """
         SELECT price FROM market_prices
         WHERE market_id = ?
-        ORDER BY timestamp DESC
+        ORDER BY id DESC
         LIMIT ?
     """,
         (market_id, limit),
@@ -81,7 +81,7 @@ def get_recent_oi(conn, market_id, limit=10):
         """
         SELECT open_interest FROM market_prices
         WHERE market_id = ?
-        ORDER BY timestamp DESC
+        ORDER BY id DESC
         LIMIT ?
     """,
         (market_id, limit),
@@ -97,7 +97,7 @@ def get_last_price(conn, market_id):
         """
         SELECT price, volume FROM market_prices
         WHERE market_id = ?
-        ORDER BY timestamp DESC
+        ORDER BY id DESC
         LIMIT 1
     """,
         (market_id,),

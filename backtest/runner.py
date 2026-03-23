@@ -8,7 +8,7 @@ from app.config import RISK_PROFILES, SELECTED_RISK_PROFILE_NAME
 
 # Use the same unified profile as the live bot
 PROFILE_NAME = SELECTED_RISK_PROFILE_NAME
-TP = 0.05
+TP = 0.10
 SL = -0.05
 
 
@@ -52,12 +52,14 @@ def backtest():
 
     history = {}
     btc_history = {}
+    last_price_by_market = {}
     trades = []
     active_trades = {}
     pnl_total = 0
 
     for row in data:
         market_id, question, coin, timeframe, price, ts = row
+        last_price_by_market[market_id] = price
         if market_id not in history:
             history[market_id] = []
         history[market_id].append(price)
@@ -111,17 +113,30 @@ def backtest():
         # EXIT
         if market_id in active_trades:
             trade = active_trades[market_id]
-            pnl = trade.pnl(price)
+            pnl = trade.pnl_pct(price)
             if pnl >= TP or pnl <= SL:
                 pnl_total += pnl
                 trades.append(pnl)
                 del active_trades[market_id]
+
+    # Force-close remaining open trades at final mark to avoid window-end bias.
+    forced_closed = 0
+    for market_id, trade in list(active_trades.items()):
+        last_price = last_price_by_market.get(market_id)
+        if last_price is None:
+            continue
+        pnl = trade.pnl_pct(last_price)
+        pnl_total += pnl
+        trades.append(pnl)
+        forced_closed += 1
+        del active_trades[market_id]
 
     print("\n" + "=" * 40)
     print(f"BACKTEST RESULTS ({PROFILE_NAME})")
     print("=" * 40)
     print(f"Closed PnL: {round(pnl_total, 4)}")
     print(f"Closed Trades: {len(trades)}")
+    print(f"Forced Closes (EOD Mark): {forced_closed}")
 
     if trades:
         winrate = sum(1 for t in trades if t > 0) / len(trades)

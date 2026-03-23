@@ -11,3 +11,7 @@ class Trade:
         else:  # BUY NO
             # Profit if price goes DOWN (YES probability decreases)
             return self.entry - current_price
+
+    def pnl_pct(self, current_price):
+        base = self.entry if self.entry > 0 else 1e-9
+        return self.pnl(current_price) / base

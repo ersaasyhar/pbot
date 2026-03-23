@@ -13,3 +13,4 @@ wheels/
 *.log
 db/*.db*
 *.pid
+db/paper_portfolio.json

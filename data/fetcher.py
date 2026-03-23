@@ -3,6 +3,7 @@ import aiohttp
 import time
 import json
 from app.config import ACTIVE_COINS
+from app.logger import get_logger
 
 BASE_URL = "https://gamma-api.polymarket.com"
 
@@ -15,6 +16,7 @@ TIMEFRAMES = {
 }
 
 MAX_RETRIES = 3
+logger = get_logger()
 
 
 # ---------------------------
@@ -43,12 +45,21 @@ def generate_candidate_slugs():
 # ASYNC REQUEST WITH RETRY
 # ---------------------------
 async def safe_get(session, url, params):
-    for _ in range(MAX_RETRIES):
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
             async with session.get(url, params=params, timeout=10) as res:
                 if res.status == 200:
                     return await res.json()
-        except:
+                if attempt == MAX_RETRIES:
+                    logger.warning(
+                        f"safe_get failed status={res.status} after {MAX_RETRIES} attempts url={url} params={params}"
+                    )
+        except Exception as e:
+            if attempt == MAX_RETRIES:
+                logger.warning(
+                    f"safe_get exception={type(e).__name__} after {MAX_RETRIES} attempts "
+                    f"url={url} params={params}"
+                )
             await asyncio.sleep(1)
     return None
 
@@ -72,33 +83,75 @@ def parse_market(event, coin, timeframe, tf_seconds):
         if not m.get("active") or m.get("closed"):
             continue
 
-        price = m.get("lastTradePrice")
-        if not price:
-            op = m.get("outcomePrices")
-            if isinstance(op, str):
+        def parse_jsonish(value):
+            if isinstance(value, list):
+                return value
+            if isinstance(value, str):
                 try:
-                    op = json.loads(op)
-                except:
-                    op = None
-            if isinstance(op, list) and len(op) > 0:
-                try:
-                    price = float(op[0])
-                except:
-                    price = None
+                    parsed = json.loads(value)
+                    return parsed if isinstance(parsed, list) else None
+                except Exception:
+                    return None
+            return None
+
+        outcomes = parse_jsonish(m.get("outcomes")) or []
+        outcome_prices = parse_jsonish(m.get("outcomePrices")) or []
+        clob_ids = parse_jsonish(m.get("clobTokenIds")) or []
+
+        # Pick the YES side consistently (for crypto up/down this is "Up").
+        yes_aliases = {"yes", "up", "higher", "above", "true"}
+        no_aliases = {"no", "down", "lower", "below", "false"}
+        chosen_idx = None
+        for i, name in enumerate(outcomes):
+            if str(name).strip().lower() in yes_aliases:
+                chosen_idx = i
+                break
+        if chosen_idx is None and outcomes:
+            # If we can identify NO side, derive YES price from 1-NO.
+            for i, name in enumerate(outcomes):
+                if str(name).strip().lower() in no_aliases and i < len(outcome_prices):
+                    try:
+                        no_px = float(outcome_prices[i])
+                        if 0 < no_px < 1:
+                            chosen_idx = i
+                    except Exception:
+                        pass
+                    break
+        if chosen_idx is None:
+            chosen_idx = 0
+
+        price = None
+        if chosen_idx < len(outcome_prices):
+            try:
+                px = float(outcome_prices[chosen_idx])
+                if 0 < px <= 1:
+                    # If chosen_idx came from NO alias, convert to YES proxy.
+                    if (
+                        chosen_idx < len(outcomes)
+                        and str(outcomes[chosen_idx]).strip().lower() in no_aliases
+                    ):
+                        px = round(1.0 - px, 6)
+                    price = px
+            except Exception:
+                price = None
+
+        if price is None:
+            last_trade_price = m.get("lastTradePrice")
+            try:
+                last_trade_price = float(last_trade_price)
+            except Exception:
+                last_trade_price = None
+            if last_trade_price and 0 < last_trade_price <= 1:
+                price = last_trade_price
 
         if price is None or price <= 0 or price > 1:
             continue
 
-        # Parse clobTokenIds (JSON string list)
-        ctids_raw = m.get("clobTokenIds")
         clob_token_id = None
-        if ctids_raw:
-            try:
-                ctids = json.loads(ctids_raw)
-                if isinstance(ctids, list) and len(ctids) > 0:
-                    clob_token_id = str(ctids[0])
-            except:
-                pass
+        if chosen_idx < len(clob_ids):
+            clob_token_id = str(clob_ids[chosen_idx])
+        elif clob_ids:
+            clob_token_id = str(clob_ids[0])
 
         # Calculate End Time from Slug / Event
         # UpDown markets in Polymarket use fixed windows.
@@ -113,8 +166,8 @@ def parse_market(event, coin, timeframe, tf_seconds):
 
                 dt = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
                 end_time = int(dt.timestamp())
-            except:
-                pass
+            except Exception:
+                end_time = 0
 
         markets.append(
             {
@@ -126,6 +179,9 @@ def parse_market(event, coin, timeframe, tf_seconds):
                 "volume": float(m.get("volumeNum") or 0),
                 "coin": coin,
                 "timeframe": timeframe,
+                "selected_outcome": (
+                    outcomes[chosen_idx] if chosen_idx < len(outcomes) else "unknown"
+                ),
                 "end_time": end_time,
                 "timestamp": int(time.time()),
             }
@@ -160,7 +216,15 @@ async def fetch_markets_async():
             tf_seconds = TIMEFRAMES.get(tf, 300)
             markets = parse_market(event, coin, tf, tf_seconds)
             if markets:
-                all_markets.extend(markets)
+                now_ts = int(time.time())
+                active_future = [m for m in markets if m.get("end_time", 0) > now_ts]
+                if active_future:
+                    # Prefer the nearest active window (current tradable cycle).
+                    selected = min(active_future, key=lambda x: x["end_time"])
+                else:
+                    # Fallback: highest-volume market from this event payload.
+                    selected = max(markets, key=lambda x: x.get("volume", 0.0))
+                all_markets.append(selected)
                 seen.add(key)
 
     all_markets.sort(key=lambda x: x["volume"], reverse=True)

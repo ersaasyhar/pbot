@@ -1,7 +1,9 @@
 import aiohttp
 import asyncio
+from app.logger import get_logger
 
 DATA_API_URL = "https://data-api.polymarket.com"
+logger = get_logger()
 
 
 async def fetch_open_interest_batch(condition_ids):
@@ -28,8 +30,9 @@ async def fetch_open_interest_batch(condition_ids):
                         data = await res.json()
                         if isinstance(data, list) and len(data) > 0:
                             return cid, float(data[0].get("value", 0))
-            except:
-                pass
+                    logger.debug(f"open_interest non-200 status={res.status} market={cid}")
+            except Exception as e:
+                logger.debug(f"open_interest fetch failed market={cid}: {e}")
             return cid, 0.0
 
         tasks = [fetch_one(cid) for cid in condition_ids]

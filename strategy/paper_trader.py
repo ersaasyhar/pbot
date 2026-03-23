@@ -1,7 +1,11 @@
 import json
 import os
 from datetime import datetime
-from app.config import SIZING_PROFILES
+from app.config import (
+    SIZING_PROFILES,
+    RISK_PROFILES,
+    SELECTED_RISK_PROFILE_NAME,
+)
 
 # Path to virtual state
 STATE_PATH = "db/paper_portfolio.json"
@@ -76,7 +80,7 @@ def execute_virtual_trade(
     """
     portfolio = load_portfolio()
     if market_id in portfolio["active_trades"]:
-        return
+        return False
 
     # --- CIRCUIT BREAKER ---
     # Max daily loss check (5% of $1000)
@@ -91,7 +95,7 @@ def execute_virtual_trade(
 
     if daily_pnl <= -50.0:
         # print(f"🛑 CIRCUIT BREAKER ACTIVE: Daily PnL is {daily_pnl}")
-        return
+        return False
 
     # --- CORRELATION GUARD ---
     active = portfolio["active_trades"].values()
@@ -99,12 +103,12 @@ def execute_virtual_trade(
     # 1. Coin Limit
     coin_count = len([t for t in active if t["coin"] == coin])
     if coin_count >= 1:
-        return
+        return False
 
     # 2. Side Limit
     side_count = len([t for t in active if t["side"] == side])
     if side_count >= 3:
-        return
+        return False
 
     # --- SLIPPAGE SIMULATION ---
     slippage_pct = 0.005
@@ -119,11 +123,11 @@ def execute_virtual_trade(
     )
 
     if trade_price < 0.20 or trade_price > 0.80:
-        return
+        return False
 
     entry_cost = calculate_stake(portfolio, sizing_profile, confidence)
     if entry_cost < 1.0 or entry_cost > portfolio["balance"]:
-        return
+        return False
 
     num_shares = round(entry_cost / trade_price, 4)
     portfolio["active_trades"][market_id] = {
@@ -148,6 +152,7 @@ def execute_virtual_trade(
         f"| Stake: ${round(entry_cost, 2)} @ {trade_price}"
     )
     save_portfolio(portfolio)
+    return True
 
 
 def update_paper_trades(current_prices, market_state=None):
@@ -157,8 +162,9 @@ def update_paper_trades(current_prices, market_state=None):
     - 5% Stop Loss (Very tight for capital preservation)
     """
     portfolio = load_portfolio()
-    TP_PCT = 0.10
-    SL_PCT = 0.05
+    selected_risk = RISK_PROFILES.get(SELECTED_RISK_PROFILE_NAME, {})
+    TP_PCT = float(selected_risk.get("tp_pct", 0.12))
+    SL_PCT = float(selected_risk.get("sl_pct", 0.08))
 
     closed_any = False
     to_delete = []
@@ -170,7 +176,42 @@ def update_paper_trades(current_prices, market_state=None):
     }
 
     for m_id, trade in portfolio["active_trades"].items():
+        now = datetime.now()
+        entry_at = datetime.fromisoformat(trade["entry_at"])
+        hold_seconds = (now - entry_at).total_seconds()
+        max_hold_sec = max_hold_by_tf_sec.get(trade.get("timeframe", "5m"), 15 * 60)
+
         if m_id not in current_prices:
+            # Market is no longer streaming (often ended). Avoid stale lock:
+            # force-close once the trade exceeded its max hold horizon.
+            if hold_seconds >= max_hold_sec:
+                entry_trade_price = float(trade["entry_price"])
+                entry_yes_price = float(
+                    trade.get(
+                        "yes_price_at_entry",
+                        entry_trade_price
+                        if trade["side"] == "BUY YES"
+                        else round(1.0 - entry_trade_price, 4),
+                    )
+                )
+                trade["exit_price"] = round(entry_trade_price, 4)
+                trade["yes_price_at_exit"] = round(entry_yes_price, 4)
+                trade["exit_at"] = str(now)
+                trade["pnl"] = 0.0
+                trade["move_pct"] = 0.0
+                trade["hold_seconds"] = int(hold_seconds)
+                trade["exit_reason"] = "STALE_TIMEOUT"
+
+                portfolio["history"].append(trade)
+                portfolio["balance"] = round(
+                    portfolio["balance"] + float(trade["entry_cost"]), 2
+                )
+                if portfolio["balance"] > portfolio.get("high_water_mark", 1000.0):
+                    portfolio["high_water_mark"] = portfolio["balance"]
+
+                to_delete.append(m_id)
+                closed_any = True
+                print("📄 PAPER EXIT: ↩ EARLY_EXIT:STALE_TIMEOUT | PnL=$0.0 (0.0%)")
             continue
 
         cur_yes_price = current_prices[m_id]
@@ -188,11 +229,6 @@ def update_paper_trades(current_prices, market_state=None):
         move_pct = (cur_trade_price - entry) / entry
 
         early_reason = None
-        now = datetime.now()
-        entry_at = datetime.fromisoformat(trade["entry_at"])
-        hold_seconds = (now - entry_at).total_seconds()
-        max_hold_sec = max_hold_by_tf_sec.get(trade.get("timeframe", "5m"), 15 * 60)
-
         if hold_seconds >= max_hold_sec:
             early_reason = "TIME"
 

@@ -25,7 +25,7 @@
         </div>
 
         <!-- Metrics Grid -->
-        <div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-10">
+        <div class="grid grid-cols-2 md:grid-cols-8 gap-4 mb-10">
             <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
                 <p class="text-gray-500 text-xs uppercase font-bold mb-1">Total PnL</p>
                 <p class="text-2xl font-mono {{ 'text-green-400' if data.metrics.total_pnl >= 0 else 'text-red-400' }}">
@@ -59,10 +59,22 @@
                     {{ (data.metrics.avg_signal_age_sec ~ "s") if data.metrics.avg_signal_age_sec is not none else "N/A" }}
                 </p>
             </div>
+            <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                <p class="text-gray-500 text-xs uppercase font-bold mb-1">Max Drawdown</p>
+                <p class="text-2xl font-mono text-red-300">
+                    {{ data.metrics.max_drawdown_pct }}%
+                </p>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                <p class="text-gray-500 text-xs uppercase font-bold mb-1">Zero-Hold Exits</p>
+                <p class="text-2xl font-mono text-orange-300">
+                    {{ data.metrics.zero_hold_exit_ratio }}%
+                </p>
+            </div>
         </div>
 
         <!-- Diagnostics -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-10">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-10">
             <div class="bg-gray-800 p-5 rounded-lg border border-gray-700">
                 <h3 class="text-sm uppercase tracking-wide text-gray-400 mb-3 font-bold">Regime PnL</h3>
                 <div class="grid grid-cols-2 gap-2 text-sm font-mono">
@@ -89,6 +101,31 @@
                         {% endfor %}
                     {% else %}
                         <p class="text-gray-500 italic">No exits yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="bg-gray-800 p-5 rounded-lg border border-gray-700">
+                <h3 class="text-sm uppercase tracking-wide text-gray-400 mb-3 font-bold">Per Coin Analysis</h3>
+                <div class="space-y-2 text-sm font-mono">
+                    {% if data.metrics.per_coin %}
+                        {% for c in data.metrics.per_coin %}
+                        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+                            <div class="flex justify-between">
+                                <span class="text-gray-300 uppercase">{{ c.coin }}</span>
+                                <span class="{{ 'text-green-400' if c.pnl >= 0 else 'text-red-400' }}">
+                                    {{ '+' if c.pnl > 0 }}${{ c.pnl }}
+                                </span>
+                            </div>
+                            <div class="text-[11px] text-gray-400 mt-1">
+                                {{ c.trades }} trades | {{ c.win_rate }}% win
+                            </div>
+                            <div class="text-[11px] text-gray-500">
+                                avg {{ '+' if c.avg_move_pct > 0 }}{{ c.avg_move_pct }}% | med {{ '+' if c.median_move_pct > 0 }}{{ c.median_move_pct }}%
+                            </div>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <p class="text-gray-500 italic">No per-coin data yet.</p>
                     {% endif %}
                 </div>
             </div>
@@ -142,7 +179,7 @@
                             <th class="px-6 py-3">Price Action</th>
                             <th class="px-6 py-3">Age/Hold</th>
                             <th class="px-6 py-3">Exit</th>
-                            <th class="px-6 py-3 text-right">PnL</th>
+                            <th class="px-6 py-3 text-right">Per-Trade PnL</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-700">
@@ -172,8 +209,11 @@
                             <td class="px-6 py-4 text-xs text-gray-300 font-mono">
                                 {{ trade.exit_reason if trade.exit_reason is defined else "N/A" }}
                             </td>
-                            <td class="px-6 py-4 text-right font-mono font-bold {{ 'text-green-400' if trade.pnl > 0 else 'text-red-400' }}">
-                                {{ '+' if trade.pnl > 0 }}${{ "{:.2f}".format(trade.pnl) }}
+                            <td class="px-6 py-4 text-right font-mono font-bold {{ 'text-green-400' if trade.trade_pnl > 0 else 'text-red-400' }}">
+                                <div>{{ '+' if trade.trade_pnl > 0 }}${{ "{:.2f}".format(trade.trade_pnl) }}</div>
+                                <div class="text-[11px] {{ 'text-green-300' if trade.trade_pnl_pct > 0 else 'text-red-300' }}">
+                                    {{ '+' if trade.trade_pnl_pct > 0 }}{{ "{:.2f}".format(trade.trade_pnl_pct) }}%
+                                </div>
                             </td>
                         </tr>
                         {% endfor %}

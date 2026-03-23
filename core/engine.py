@@ -2,6 +2,8 @@ import sqlite3
 import time
 import asyncio
 import math
+import json
+import os
 from dotenv import load_dotenv
 
 from app.logger import get_logger
@@ -34,6 +36,8 @@ SELECTED_RISK_PROFILE = RISK_PROFILES.get(RISK_PROFILE_NAME)
 SIZING_PROFILE_NAME = SELECTED_SIZING_PROFILE_NAME
 
 ACTIVE_MARKETS = {}
+ACTIVE_MARKET_BY_KEY = {}
+SUBSCRIBED_TOKENS = set()
 LATEST_PRICES = {}
 LATEST_SPREADS = {}
 LATEST_PRESSURE = {}  # Track Order Book Pressure
@@ -41,6 +45,8 @@ LATEST_DEPTH = {}
 LATEST_ANALYSIS = {}
 SIGNAL_STATE = {}
 ENTRY_CANDIDATES = {}
+BLOCKED_COINS = set()
+BLOCKED_COIN_STATS = {}
 SEEN_MARKET_IDS = set()
 ws_client = PolymarketWS()
 
@@ -52,12 +58,70 @@ LAST_SAVED_PRICE = {}
 conn = None
 
 
+def refresh_coin_gate():
+    """
+    Build blocked-coin set from rolling paper-trade performance.
+    Gate is intentionally simple: block only when both win rate and expectancy are weak.
+    """
+    profile = SELECTED_RISK_PROFILE or {}
+    if not bool(profile.get("coin_gate_enabled", True)):
+        return {}, {}
+
+    path = "db/paper_portfolio.json"
+    if not os.path.exists(path):
+        return {}, {}
+
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return {}, {}
+
+    history = data.get("history", [])
+    if not history:
+        return {}, {}
+
+    min_trades = int(profile.get("coin_gate_min_closed_trades", 12))
+    lookback = int(profile.get("coin_gate_lookback_trades", 30))
+    min_win_rate = float(profile.get("coin_gate_min_win_rate", 0.35))
+    max_expectancy = float(profile.get("coin_gate_max_expectancy", 0.0))
+
+    grouped = {}
+    for t in history:
+        coin = (t.get("coin") or "").lower()
+        if not coin:
+            continue
+        grouped.setdefault(coin, []).append(t)
+
+    blocked = {}
+    debug_stats = {}
+    for coin, trades in grouped.items():
+        sample = trades[-lookback:]
+        n = len(sample)
+        if n < min_trades:
+            continue
+        pnl_values = [float(t.get("pnl", 0.0)) for t in sample]
+        wins = sum(1 for p in pnl_values if p > 0)
+        win_rate = wins / n if n > 0 else 0.0
+        expectancy = (sum(pnl_values) / n) if n > 0 else 0.0
+        debug_stats[coin] = {
+            "trades": n,
+            "win_rate": round(win_rate * 100, 1),
+            "expectancy": round(expectancy, 4),
+        }
+        if expectancy <= max_expectancy and win_rate <= min_win_rate:
+            blocked[coin] = debug_stats[coin]
+
+    return blocked, debug_stats
+
+
 def detect_regime(features, timeframe):
     rel_vol = features.get("rel_vol", 1.0)
     momentum_pct = abs(features.get("momentum_pct", 0.0))
     z_abs = abs(features.get("z_score", 0.0))
 
-    if rel_vol >= 1.35:
+    # Raise volatile threshold so we do not over-classify short noise bursts as "skip".
+    if rel_vol >= 1.8:
         return "volatile"
 
     if timeframe in ["1h", "4h"]:
@@ -91,7 +155,7 @@ def execute_top_candidates():
         if now - c["queued_at"] > max_age_sec:
             continue
 
-        execute_virtual_trade(
+        opened = execute_virtual_trade(
             c["market_id"],
             c["question"],
             c["side"],
@@ -104,12 +168,13 @@ def execute_top_candidates():
             regime=c["regime"],
             signal_age_sec=c["signal_age_sec"],
         )
-        selected += 1
+        if opened:
+            selected += 1
 
     ENTRY_CANDIDATES.clear()
 
 
-async def process_price_update(token_id, price, spread=None, pressure=0.0, depth=None):
+async def process_price_update(token_id, price, spread=None, pressure=None, depth=None):
     global UPDATES_COUNT
     if conn is None:
         return
@@ -122,7 +187,8 @@ async def process_price_update(token_id, price, spread=None, pressure=0.0, depth
     if spread is not None:
         LATEST_SPREADS[market_id] = spread
 
-    LATEST_PRESSURE[market_id] = pressure
+    if pressure is not None:
+        LATEST_PRESSURE[market_id] = pressure
     if depth is not None:
         LATEST_DEPTH[market_id] = depth
 
@@ -153,8 +219,8 @@ async def process_price_update(token_id, price, spread=None, pressure=0.0, depth
                 cur_btc = btc_prices[0]
                 market_context["btc_trending_up"] = cur_btc > btc_sma
                 market_context["btc_trending_down"] = cur_btc < btc_sma
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"BTC macro context fetch failed: {e}")
 
         # 3. RUN ANALYSIS
         series = get_recent_prices(conn, market_id, limit=30)
@@ -163,22 +229,6 @@ async def process_price_update(token_id, price, spread=None, pressure=0.0, depth
             features = build_features(series, m.get("volume", 0), oi_series)
 
             if features:
-                # --- v30: DEBUG LOGGING ---
-                # Log all features and context for every analysis cycle
-                ev = (features.get("confidence", 0.5) * 0.10) - (
-                    (1.0 - features.get("confidence", 0.5)) * 0.05
-                )
-                log_msg = (
-                    f"ANALYSIS [{m['coin']}-{m['timeframe']}] | "
-                    f"P: {features['price']:.3f}, "
-                    f"Z: {features['z_score']:.2f}, "
-                    f"RSI: {features['rsi']:.1f}, "
-                    f"RelVol: {features['rel_vol']:.2f}, "
-                    f"Pressure: {features.get('pressure', 0):.2f}, "
-                    f"EV: {ev:+.2f}"
-                )
-                logger.debug(log_msg)
-
                 cur_spread = LATEST_SPREADS.get(market_id, 0)
                 cur_pressure = LATEST_PRESSURE.get(market_id, 0.0)
                 cur_depth = LATEST_DEPTH.get(market_id, 0.0)
@@ -186,20 +236,44 @@ async def process_price_update(token_id, price, spread=None, pressure=0.0, depth
                 features["pressure"] = cur_pressure
                 features["depth_top5"] = cur_depth
 
+                # Log after attaching live pressure/spread/depth.
+                z_strength = min(abs(features.get("z_score", 0.0)) / 3.0, 1.0)
+                ev_proxy = ((0.5 + (z_strength * 0.2)) * 0.10) - (
+                    (1.0 - (0.5 + (z_strength * 0.2))) * 0.05
+                )
+                log_msg = (
+                    f"ANALYSIS [{m['coin']}-{m['timeframe']}] | "
+                    f"P: {features['price']:.3f}, "
+                    f"Z: {features['z_score']:.2f}, "
+                    f"RSI: {features['rsi']:.1f}, "
+                    f"RelVol: {features['rel_vol']:.2f}, "
+                    f"Pressure: {cur_pressure:.2f}, "
+                    f"EVproxy: {ev_proxy:+.2f}"
+                )
+                logger.debug(log_msg)
+
+                coin_key = (m.get("coin") or "").lower()
+                if coin_key in BLOCKED_COINS:
+                    return
+
                 regime = detect_regime(features, m.get("timeframe", "5m"))
                 market_context["regime"] = regime
 
                 # v31: STRATEGY ROUTER
                 timeframe = m.get("timeframe", "5m")
 
-                if regime == "volatile":
-                    signal, confidence = None, 0.0
-                    strategy_name = "SKIP_VOLATILE"
-                elif timeframe in ["1h", "4h"] or regime == "trend":
+                if timeframe in ["1h", "4h"] or regime == "trend":
                     signal, confidence = generate_trend_signal(
                         features, SELECTED_RISK_PROFILE, market_context
                     )
                     strategy_name = "TREND"
+                elif regime == "volatile":
+                    # In volatile microstructure, fading short over-extensions is usually safer
+                    # than chasing breakouts.
+                    signal, confidence = generate_mean_reversion_signal(
+                        features, SELECTED_RISK_PROFILE, market_context
+                    )
+                    strategy_name = "VOL_REVERSION"
                 else:
                     signal, confidence = generate_mean_reversion_signal(
                         features, SELECTED_RISK_PROFILE, market_context
@@ -208,7 +282,6 @@ async def process_price_update(token_id, price, spread=None, pressure=0.0, depth
 
                 # Continuous state used for lifecycle exits.
                 # Heuristic EV proxy when no entry signal is active.
-                z_strength = min(abs(features.get("z_score", 0.0)) / 3.0, 1.0)
                 base_confidence = 0.5 + (z_strength * 0.2)
                 base_ev = (base_confidence * 0.10) - ((1.0 - base_confidence) * 0.05)
                 LATEST_ANALYSIS[market_id] = {
@@ -330,8 +403,13 @@ async def on_ws_event(data):
             # 1. TOP OF BOOK (for Midpoint/Spread)
             bid_p = float(bids[0].get("price", 0))
             ask_p = float(asks[0].get("price", 0))
+            if bid_p <= 0 or ask_p <= 0 or ask_p < bid_p:
+                return
             mid = (bid_p + ask_p) / 2
             spread = ask_p - bid_p
+            if spread > 0.30:
+                # Ignore clearly broken/placeholder top-of-book snapshots.
+                return
 
             # 2. DEEP ORDER BOOK IMBALANCE (OBI) - Top 5 levels
             # We look at 'depth' to see hidden walls
@@ -355,16 +433,41 @@ async def on_ws_event(data):
 
 
 async def sync_loop():
-    global UPDATES_COUNT
+    global UPDATES_COUNT, BLOCKED_COINS, BLOCKED_COIN_STATS
     while True:
         try:
+            blocked_map, coin_stats = refresh_coin_gate()
+            new_blocked = set(blocked_map.keys())
+            if new_blocked != BLOCKED_COINS:
+                BLOCKED_COINS = new_blocked
+                BLOCKED_COIN_STATS = coin_stats
+                if BLOCKED_COINS:
+                    logger.info(
+                        f"🧱 COIN GATE active: {sorted(BLOCKED_COINS)} | details={blocked_map}"
+                    )
+                else:
+                    logger.info("🧱 COIN GATE active: none")
+
             markets = await fetch_markets_async()
             new_tokens = []
             for m in markets:
                 tid = m.get("clob_token_id")
-                if tid and tid not in ACTIVE_MARKETS:
-                    ACTIVE_MARKETS[tid] = m
+                if not tid:
+                    continue
+
+                key = f"{m.get('coin', '')}-{m.get('timeframe', '')}"
+                prev_tid = ACTIVE_MARKET_BY_KEY.get(key)
+
+                # Keep only one active contract per coin-timeframe key.
+                if prev_tid and prev_tid != tid:
+                    ACTIVE_MARKETS.pop(prev_tid, None)
+
+                ACTIVE_MARKET_BY_KEY[key] = tid
+                ACTIVE_MARKETS[tid] = m
+
+                if tid not in SUBSCRIBED_TOKENS:
                     new_tokens.append(tid)
+                    SUBSCRIBED_TOKENS.add(tid)
             if new_tokens:
                 await ws_client.update_subscription(new_tokens)
             execute_top_candidates()
@@ -377,9 +480,9 @@ async def sync_loop():
 
 
 async def run():
-    global conn
+    global conn, BLOCKED_COINS, BLOCKED_COIN_STATS
     logger.info(
-        f"🚀 v34 (Decay + TopN + Metrics + fast calibration) | Risk: {RISK_PROFILE_NAME} | Size: {SIZING_PROFILE_NAME}"
+        f"🚀 v35 (stable market routing + yes mapping + ordered ticks) | Risk: {RISK_PROFILE_NAME} | Size: {SIZING_PROFILE_NAME}"
     )
     init_db()
     conn = sqlite3.connect(
@@ -390,6 +493,8 @@ async def run():
     conn.execute("PRAGMA busy_timeout=5000")
 
     ACTIVE_MARKETS.clear()
+    ACTIVE_MARKET_BY_KEY.clear()
+    SUBSCRIBED_TOKENS.clear()
     LATEST_PRICES.clear()
     LATEST_SPREADS.clear()
     LATEST_PRESSURE.clear()
@@ -397,14 +502,24 @@ async def run():
     LATEST_ANALYSIS.clear()
     SIGNAL_STATE.clear()
     ENTRY_CANDIDATES.clear()
+    BLOCKED_COINS.clear()
+    BLOCKED_COIN_STATS.clear()
 
     initial_markets = await fetch_markets_async()
-    initial_tokens = [
-        m["clob_token_id"] for m in initial_markets if m.get("clob_token_id")
-    ]
+    initial_tokens = []
     for m in initial_markets:
-        if m.get("clob_token_id"):
-            ACTIVE_MARKETS[m["clob_token_id"]] = m
+        tid = m.get("clob_token_id")
+        if not tid:
+            continue
+        key = f"{m.get('coin', '')}-{m.get('timeframe', '')}"
+        prev_tid = ACTIVE_MARKET_BY_KEY.get(key)
+        if prev_tid and prev_tid != tid:
+            ACTIVE_MARKETS.pop(prev_tid, None)
+        ACTIVE_MARKET_BY_KEY[key] = tid
+        ACTIVE_MARKETS[tid] = m
+
+    initial_tokens = list(ACTIVE_MARKETS.keys())
+    SUBSCRIBED_TOKENS.update(initial_tokens)
     logger.info(f"Loaded {len(initial_tokens)} markets for initial WS subscription.")
     asyncio.create_task(sync_loop())
     await ws_client.connect_and_listen(initial_tokens, on_ws_event)

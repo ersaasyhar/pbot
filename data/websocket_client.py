@@ -53,14 +53,17 @@ class PolymarketWS:
 
                         try:
                             data = json.loads(message)
-                            if data.get("type") == "subscription_success":
+                            if isinstance(data, dict) and data.get(
+                                "type"
+                            ) == "subscription_success":
                                 continue
 
                             events = data if isinstance(data, list) else [data]
                             for ev in events:
                                 if isinstance(ev, dict):
                                     await self.callback(ev)
-                        except:
+                        except Exception as e:
+                            logger.debug(f"WS message parse/callback error: {e}")
                             continue
 
             except Exception as e:
@@ -73,7 +76,8 @@ class PolymarketWS:
             try:
                 await self.ws.send("PING")
                 await asyncio.sleep(10)
-            except:
+            except Exception as e:
+                logger.debug(f"WS heartbeat stopped: {e}")
                 break
 
     async def update_subscription(self, new_tokens):

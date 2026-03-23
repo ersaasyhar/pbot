@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import ApiCreds
 from py_clob_client.constants import POLYGON
+from app.logger import get_logger
 
 load_dotenv()
+logger = get_logger()
 
 
 def get_clob_client():
@@ -56,6 +58,6 @@ def get_market_spread(client, token_id):
             "spread": spread,
             "midpoint": midpoint,
         }
-    except Exception:
-        # print(f"Error fetching spread for {token_id}: {e}")
+    except Exception as e:
+        logger.debug(f"Error fetching spread for {token_id}: {e}")
         return None

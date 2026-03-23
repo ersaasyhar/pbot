@@ -29,6 +29,10 @@ def generate_trend_signal(features, profile, market_context=None):
     rsi_max = profile.get("rsi_max", 85)
     oi_min = profile.get("min_oi_trend", -0.02)
     max_recent_move_pct = profile.get("max_recent_move_pct", 0.06)
+    min_pressure_yes = profile.get("min_pressure_yes", 0.15)
+    max_pressure_no = profile.get("max_pressure_no", -0.15)
+    trend_price_low = profile.get("trend_price_low", 0.20)
+    trend_price_high = profile.get("trend_price_high", 0.45)
 
     # --- VOLATILITY REGIME & TIMEFRAME ADJUSTMENT ---
     rel_vol = features.get("rel_vol", 1.0)
@@ -50,10 +54,10 @@ def generate_trend_signal(features, profile, market_context=None):
         return round(0.5 + z_norm + p_norm + oi_norm, 2)
 
     # --- STRATEGY 1: TREND BREAKOUT (BUY YES) ---
-    if 0.20 <= price <= 0.45:
+    if trend_price_low <= price <= trend_price_high:
         if z_score > z_thresh and momentum > 0 and btc_up:
             if rsi_min < rsi < rsi_max:
-                if pressure > 0.15:
+                if pressure >= min_pressure_yes:
                     if (
                         price > major_sma
                         and oi_trend >= oi_min
@@ -64,11 +68,11 @@ def generate_trend_signal(features, profile, market_context=None):
 
     # --- STRATEGY 2: TREND BREAKOUT (BUY NO) ---
     no_price = round(1.0 - price, 4)
-    if 0.20 <= no_price <= 0.45:
+    if trend_price_low <= no_price <= trend_price_high:
         if z_score < -z_thresh and momentum < 0 and btc_down:
             no_rsi = 100 - rsi
             if rsi_min < no_rsi < rsi_max:
-                if pressure < -0.15:
+                if pressure <= max_pressure_no:
                     if (
                         price < major_sma
                         and oi_trend >= oi_min
@@ -91,6 +95,12 @@ def generate_mean_reversion_signal(features, profile, market_context=None):
     price = features["price"]
     z_score = features["z_score"]
     rsi = features["rsi"]
+    z_thresh = profile.get("mean_rev_z_thresh", 2.5)
+    rsi_high = profile.get("mean_rev_rsi_high", 80)
+    rsi_low = profile.get("mean_rev_rsi_low", 20)
+    use_macro_filter = profile.get("mean_rev_use_macro_filter", True)
+    price_low = profile.get("mean_rev_price_low", 0.20)
+    price_high = profile.get("mean_rev_price_high", 0.80)
 
     # --- MACRO CONTEXT ---
     btc_up = True
@@ -101,7 +111,7 @@ def generate_mean_reversion_signal(features, profile, market_context=None):
 
     # This strategy looks for overreactions, so it doesn't use the deep value price filter.
     # It still respects the absolute safety zone (0.20-0.80).
-    if price < 0.20 or price > 0.80:
+    if price < price_low or price > price_high:
         return None, 0.0
 
     signal = None
@@ -115,12 +125,12 @@ def generate_mean_reversion_signal(features, profile, market_context=None):
 
     # --- STRATEGY: FADE THE SPIKE ---
     # If price spikes (high Z-score, high RSI) and BTC isn't in a strong uptrend, bet against it.
-    if z_score > 2.5 and rsi > 80 and not btc_up:
+    if z_score > z_thresh and rsi > rsi_high and (not use_macro_filter or not btc_up):
         signal = "BUY NO"
         confidence = calc_confidence(z_score)
 
     # If price crashes (low Z-score, low RSI) and BTC isn't in a strong downtrend, bet on recovery.
-    if z_score < -2.5 and rsi < 20 and not btc_down:
+    if z_score < -z_thresh and rsi < rsi_low and (not use_macro_filter or not btc_down):
         signal = "BUY YES"
         confidence = calc_confidence(z_score)
 

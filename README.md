@@ -8,6 +8,8 @@ This project is a professional high-frequency trading bot designed for Polymarke
 *   **v21-v29 "The Quant Stack":** A full suite of institutional-grade features transforming the bot from a simple signal-follower to a professional probabilistic trading system.
 *   **v32 "Profitability Upgrade":** Regime-aware routing fixes, friction-adjusted EV, liquidity gating, fresh-breakout protection, early exits, and SQLite lock hardening.
 *   **v33 "Selectivity Engine":** Signal time-decay, top-N trade competition, and new performance metrics (expectancy/regime/entry-age/exit-reason).
+*   **v35 "Runtime Stability":** Stable yes-side mapping, active-market routing fixes, book-snapshot guards, and ordered tick reads.
+*   **v36 "Execution Safety":** Automatic coin gate, stale-position timeout close, profile-based TP/SL, and per-coin dashboard analytics.
 
 ---
 
@@ -201,3 +203,79 @@ uv run -m backtest.sweep --rows-limit 20000 --apply-best --min-closed-for-apply 
 Outputs:
 - `db/best_params.json`: best run + ranked top results
 - Optional `config.json` update when `--apply-best` passes the minimum closed-trade gate
+
+### 🆕 v35 Runtime Stability
+
+This version hardens live execution consistency and signal quality:
+
+*   **YES/NO Mapping Fix:**
+    *   Market parsing now maps to the correct YES-side token/outcome rather than assuming index `0`.
+*   **One Active Contract per Coin-Timeframe:**
+    *   Engine keeps only the latest active contract per key (e.g., `btc-15m`) to avoid mixed-window signal noise.
+*   **Broken Book Snapshot Guard:**
+    *   Invalid top-of-book snapshots (bad bid/ask or unrealistic spread) are ignored.
+*   **Stable Tick Ordering:**
+    *   Recent series reads now use insertion order (`id DESC`) to avoid intra-second ordering anomalies.
+*   **WS Parser Robustness:**
+    *   Handles list payloads safely without callback parse errors.
+
+### 🆕 v36 Execution Safety & Monitoring
+
+This version adds portfolio-protection controls and richer diagnostics:
+
+*   **Automatic Coin Gate:**
+    *   Blocks new entries for weak coins using rolling win-rate + expectancy thresholds.
+    *   Config keys per risk profile:
+        *   `coin_gate_enabled`
+        *   `coin_gate_min_closed_trades`
+        *   `coin_gate_lookback_trades`
+        *   `coin_gate_min_win_rate`
+        *   `coin_gate_max_expectancy`
+*   **Stale Position Auto-Close:**
+    *   If a market stops streaming and trade exceeds max hold horizon, it force-closes with `STALE_TIMEOUT` and releases capital.
+*   **Profile-Based TP/SL:**
+    *   Paper exits now read `tp_pct` and `sl_pct` from selected risk profile.
+*   **Dashboard Per-Coin Panel:**
+    *   Displays per-coin `trades`, `win_rate`, `pnl`, `avg_move_pct`, and `median_move_pct`.
+*   **Per-Trade PnL Display:**
+    *   Trade history shows PnL in both USD and percentage.
+
+### 📊 Metrics Status (Dashboard vs Not Yet)
+
+Already visible in dashboard:
+*   `total_pnl`, `roi`, `win_rate`, `expectancy`
+*   `active_count`, `closed_count`, `total_trades`
+*   `avg_signal_age_sec`
+*   `max_drawdown_pct`
+*   `zero_hold_exit_ratio`
+*   `regime_pnl`
+*   `exit_reasons`
+*   `per-coin analysis` (trades/win-rate/pnl/avg/median move)
+*   `per-trade PnL` ($ and %)
+
+Not yet shown directly on dashboard (available from logs/data):
+*   Rolling coin expectancy windows used by coin gate
+
+### 📘 Dashboard Metrics Glossary
+
+*   **Total PnL (`total_pnl`)**: Sum of realized PnL from closed trades.
+*   **ROI (`roi`)**: `total_pnl / initial_balance * 100` (initial balance = `$1000`).
+*   **Win Rate (`win_rate`)**: Percent of closed trades with positive PnL.
+*   **Expectancy (`expectancy`)**: Average realized PnL per closed trade.
+*   **Active / Finished / Total**:
+    *   `active_count` = currently open paper trades
+    *   `finished` = closed trades count
+    *   `total_trades` = active + closed
+*   **Avg Signal Age (`avg_signal_age_sec`)**: Average signal age at entry for trades that recorded it.
+*   **Max Drawdown (`max_drawdown_pct`)**: Largest peak-to-trough equity drop (reconstructed from closed-trade PnL stream).
+*   **Zero-Hold Exits (`zero_hold_exit_ratio`)**: Percent of closed trades with `hold_seconds == 0`.
+*   **Regime PnL (`regime_pnl`)**: Realized PnL grouped by entry regime (`trend`, `range`, `volatile`, `unknown`).
+*   **Exit Reasons (`exit_reasons`)**: Count by exit label (`TP`, `SL`, `TIME`, `EV_FLIP`, `PRESSURE_FLIP`, `STALE_TIMEOUT`, etc.).
+*   **Per Coin Analysis (`per_coin`)**:
+    *   `trades`: closed trades for that coin
+    *   `win_rate`: positive-PnL trade ratio
+    *   `pnl`: total realized PnL
+    *   `avg_move_pct` / `median_move_pct`: average/median realized move%
+*   **Per-Trade PnL (History Table)**:
+    *   `$` = realized PnL in dollars
+    *   `%` = realized move percentage for that specific trade
