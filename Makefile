@@ -5,12 +5,14 @@ PID_FILE = db/bot.pid
 DASHBOARD_PID = db/dashboard.pid
 PORTFOLIO_FILE = db/paper_portfolio.json
 
-.PHONY: help run backtest sweep sweep-apply stop status logs clean dashboard dashboard-stop reset-portfolio
+.PHONY: help run backtest replay walkforward sweep sweep-apply stop status logs clean dashboard dashboard-stop reset-portfolio
 
 help:
 	@echo "Available commands:"
 	@echo "  make run             - Start the bot in the background"
 	@echo "  make backtest        - Run the historical backtester"
+	@echo "  make replay          - Run WS tick replay backtest with friction model"
+	@echo "  make walkforward     - Run walk-forward tuning/validation on WS replay data"
 	@echo "  make sweep           - Run parameter sweep for fast calibration"
 	@echo "  make sweep-apply     - Run sweep and apply best params to selected profile"
 	@echo "  make stop            - Stop the background bot"
@@ -44,6 +46,14 @@ backtest:
 	@echo "📈 Running Backtest..."
 	@$(PYTHONPATH_EXPORT) && uv run -m backtest.runner
 
+replay:
+	@echo "🎬 Running WS Replay Backtest..."
+	@$(PYTHONPATH_EXPORT) && uv run -m backtest.replay
+
+walkforward:
+	@echo "🧪 Running Walk-Forward Replay Validation..."
+	@$(PYTHONPATH_EXPORT) && uv run -m backtest.walkforward
+
 sweep:
 	@echo "🧪 Running Parameter Sweep..."
 	@$(PYTHONPATH_EXPORT) && uv run -m backtest.sweep
@@ -65,7 +75,7 @@ stop:
 
 reset-portfolio: stop dashboard-stop
 	@echo "🗑️ Resetting Paper Portfolio..."
-	@rm -f $(PORTFOLIO_FILE)
+	@$(PYTHONPATH_EXPORT) && uv run python -c "from data.storage import init_db, reset_paper_trading_state; init_db(); reset_paper_trading_state(1000.0)"
 	@echo "✅ Portfolio deleted. Starting fresh bot..."
 	@$(MAKE) --no-print-directory run
 	@$(MAKE) --no-print-directory dashboard

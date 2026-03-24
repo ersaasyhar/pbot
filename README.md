@@ -10,6 +10,8 @@ This project is a professional high-frequency trading bot designed for Polymarke
 *   **v33 "Selectivity Engine":** Signal time-decay, top-N trade competition, and new performance metrics (expectancy/regime/entry-age/exit-reason).
 *   **v35 "Runtime Stability":** Stable yes-side mapping, active-market routing fixes, book-snapshot guards, and ordered tick reads.
 *   **v36 "Execution Safety":** Automatic coin gate, stale-position timeout close, profile-based TP/SL, and per-coin dashboard analytics.
+*   **v39 "Replay Data Pipeline":** WS tick recorder (`ws_ticks`), SQL paper-trade mirror (`paper_trades`), replay backtest, and walk-forward validation.
+*   **v40 "SQLite Portfolio Core":** Paper portfolio migrated from JSON to SQLite source-of-truth with deadlock-safe coin gate.
 
 ---
 
@@ -25,8 +27,8 @@ The bot now operates on a professional architecture that mirrors institutional t
 
 *   **Layer 3: Strategy Engine (The Multi-Strategy Core)**
     *   **Strategy Router (v31):** The bot now intelligently selects the optimal strategy based on market timeframe:
-        *   **Trend-Following Sniper (1h/4h charts):** Focuses on high-momentum breakouts with strong Order Book support.
-        *   **Mean Reversion (5m/15m charts):** Designed to "fade" (bet against) extreme, short-term price spikes, expecting a quick snap-back.
+        *   **Current live focus:** `BTC 15m` trend-following only.
+        *   **Research result:** `BTC 5m` was negative in sweep testing and is currently disabled for live trading.
     *   **Bitcoin Macro Trend Filter:** The bot aligns its BUY/SELL decisions with the overall Bitcoin trend, only taking `BUY YES` trades when BTC is trending up, and `BUY NO` trades when BTC is trending down.
     *   **Signal → Probability:** Signals are converted into a **Confidence Score** (0.5 to 1.0) based on Z-Score, OBI, and Open Interest alignment.
     *   **Probability → Expected Value (EV):** The bot will **reject any trade** that doesn't have a positive mathematical edge, calculated as: `EV = (Win % * Reward) - (Loss % * Risk)`.
@@ -45,11 +47,11 @@ The bot now operates on a professional architecture that mirrors institutional t
 - **Language:** Python 3.12+ (uv manager)
 - **Web Engine:** Flask (Secure Terminal UI + Tailwind CSS)
 - **Networking:** `websockets` (Real-time CLOB market stream)
-- **Database:** SQLite (Price history) & JSON (Virtual Portfolio)
+- **Database:** SQLite (`market_prices`, `ws_ticks`, `paper_trades`, `paper_portfolio_state`)
 - **APIs:** Gamma (Discovery), CLOB (Execution), Data (Conviction)
 
 ### 📂 Directory Structure
-- **`config.json`**: **Master Control.** Switch Risk Profiles and Bet Sizes here.
+- **`config.json`**: **Master Control.** Current runtime uses a single `MAIN` profile and sizing profile.
 - **`app/`**: Dashboard API, UI Templates, and Config Loader.
 - **`core/`**: The high-speed async engine (WebSocket handler).
 - **`strategy/`**: Symmetric Signal logic and Paper Trading module.
@@ -57,7 +59,7 @@ The bot now operates on a professional architecture that mirrors institutional t
 - **`db/`**: Price history, trade history, and PID management.
 
 ### 🚀 Quick Start
-1.  **Configure**: Fill in `.env` (API Keys) and `config.json` (Risk Profile).
+1.  **Configure**: Fill in `.env` (API Keys) and `config.json` (MAIN profile + sizing).
 2.  **Run Bot**: `make run`
 3.  **Start Dashboard**: `make dashboard`
 4.  **Terminal**: Visit `http://<your-ec2-ip>/localhost:5000` (Uses `DASHBOARD_PASSWORD` from `.env`).
@@ -66,6 +68,8 @@ The bot now operates on a professional architecture that mirrors institutional t
 - **Check Status**: `make status`
 - **Reset Portfolio**: `make reset-portfolio` (Wipes history and returns balance to $1,000)
 - **Backtest**: `make backtest` (Matched to your current `config.json` profile)
+- **Replay Backtest**: `make replay` (Uses recorded `ws_ticks` + friction model)
+- **Walk-Forward**: `make walkforward` (Train/validate over rolling replay windows)
 - **Watch Logs**: `make logs`
 
 ---
@@ -158,7 +162,7 @@ The bot applies its filters in a specific order:
 3.  **Bitcoin Macro Trend Check:**
     *   (Not shown in this log line, but checked internally) If BTC is trending down, `BUY NO` would be considered. If BTC is trending up, `BUY YES` would be considered. Assuming it matches. **✅ PASS (for this example)**
 4.  **Volatility Regime Adjusted Z-Score Check:**
-    *   For `BALANCED` profile, base `z_thresh` is `1.2`.
+    *   For `MAIN` profile, base `z_thresh` is `0.7`.
     *   For `5m` timeframe, `z_thresh` is scaled up by `1.2` (noise penalty): `1.2 * 1.2 = 1.44`.
     *   `RelVol: 1.11` further scales `z_thresh` (`1.44 * max(1.0, 1.11)`).
     *   The required Z-Score (absolute value) is now above `1.44`.
@@ -182,15 +186,23 @@ Since steps 4 and 5 failed, this market `[btc-5m]` will **NOT** generate a `SNIP
 *   **Regime PnL**: Profit/loss grouped by entry regime, used to see where the edge exists.
     *   Example: `trend +$12.4 (20 trades)`, `range -$4.1 (18 trades)`, `volatile -$1.8 (5 trades)`.
 
-### ⚙️ Risk Profiles (`config.json`)
-| Profile | Stance | Z-Score | RSI Range | Min Volume |
-| :--- | :--- | :--- | :--- | :--- |
-| **Conservative** | Safety | 1.5 | 55 - 85 | $2,000 |
-| **Balanced** | Growth | 1.2 | 45 - 85 | $500 |
-| **Aggressive** | Fast | 0.8 | 35 - 90 | $100 |
+### ⚙️ Risk Profile (`config.json`)
+Single profile for production focus (name `MAIN`).
+
+Current live configuration:
+*   `trade_allowed_coins = ["btc"]`
+*   `trade_allowed_timeframes = ["15m"]`
+*   `max_entries_per_cycle = 1`
+*   `min_effective_ev = 0.01`
+*   `signal_decay_lambda = 0.008`
+*   `max_signal_age_sec = 45`
+*   `tp_pct = 0.12`
+*   `sl_pct = 0.05`
 
 ### 🧪 Fast Evaluation Commands
 - **Single Backtest**: `make backtest`
+- **WS Replay Backtest**: `make replay`
+- **Walk-Forward Replay Validation**: `make walkforward`
 - **Parameter Sweep**: `make sweep`
 - **Sweep + Auto-Apply (safe gate)**: `make sweep-apply`
 
@@ -203,6 +215,41 @@ uv run -m backtest.sweep --rows-limit 20000 --apply-best --min-closed-for-apply 
 Outputs:
 - `db/best_params.json`: best run + ranked top results
 - Optional `config.json` update when `--apply-best` passes the minimum closed-trade gate
+
+### 🆕 v39 Replay Data Pipeline
+
+This version adds a historical pipeline for faster, more realistic offline evaluation:
+
+*   **WS Recorder (`ws_ticks`):**
+    *   Stores replay-ready microstructure snapshots from live stream events:
+        *   bid/ask, mid, spread
+        *   top-5 depth totals and pressure
+        *   event type and timestamps
+*   **SQL Paper Trade Mirror (`paper_trades`):**
+    *   Every paper entry/exit is now mirrored to SQLite with stable `trade_id` and lifecycle fields.
+    *   SQLite is the runtime source of truth for dashboard and paper trading.
+*   **Replay Backtester (`backtest.replay`):**
+    *   Replays `ws_ticks` in time order.
+    *   Reuses current signal logic + profile filters.
+    *   Applies fill friction model (spread, depth impact, latency/slippage penalties).
+*   **Walk-Forward Validator (`backtest.walkforward`):**
+    *   Tunes selected params on train windows and validates on forward windows.
+    *   Produces out-of-sample summary to reduce overfitting risk.
+
+### 🆕 v40 SQLite Portfolio Core
+
+Paper trading now uses SQLite as the runtime source of truth (JSON is legacy):
+
+*   **`paper_portfolio_state` (state table):**
+    *   Stores current portfolio state (`balance`, `high_water_mark`, `initial_balance`).
+    *   Used by risk checks, sizing, and dashboard totals.
+*   **`paper_trades` (ledger table):**
+    *   Stores each paper trade lifecycle (`OPEN` → `CLOSED`) with full metadata.
+    *   Used by dashboard history, coin gate analytics, and post-trade analysis.
+*   **Legacy JSON migration:**
+    *   If `db/paper_portfolio.json` exists, it is auto-migrated on startup and renamed to `.migrated`.
+*   **Coin Gate Deadlock Guard:**
+    *   Prevents blocking all configured entry coins at once.
 
 ### 🆕 v35 Runtime Stability
 
@@ -279,3 +326,23 @@ Not yet shown directly on dashboard (available from logs/data):
 *   **Per-Trade PnL (History Table)**:
     *   `$` = realized PnL in dollars
     *   `%` = realized move percentage for that specific trade
+
+### 📌 Current Research Conclusion
+
+Recent sweep and replay work leads to the current operating decision:
+
+*   **Keep live trading on `BTC 15m` only.**
+*   **Trend logic is the only component with evidence of edge in current backtests.**
+*   **`BTC 5m` is currently disabled for live trading.**
+*   **Mean-reversion-only sweeps produced zero trades on the tested samples.**
+*   **Late-expiry dominance strategy is not validated and is not a live candidate.**
+
+Backtest summary used for the current live config:
+
+*   `BTC 15m` sweep on `100000` rows was positive.
+    *   Best region clustered around `min_ev=0.01`, `decay=0.008-0.012`, `topN=1`, `tp=0.12`, `sl=0.05-0.06`.
+    *   Best row: `87 trades`, `52.9% win`, `expectancy +0.0142`, `profit factor 1.23`.
+*   `BTC 5m` sweep on `100000` rows was negative across the tested grid.
+*   `--disable-trend` sweeps produced `0` trades, so current edge is not coming from mean reversion.
+
+This is why `config.json` is currently set to `BTC 15m` with one-entry, trend-focused parameters.

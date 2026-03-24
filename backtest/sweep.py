@@ -63,6 +63,11 @@ def run_once(
     signal_decay_lambda,
     max_signal_age_sec,
     max_entries_per_cycle,
+    tp_pct,
+    sl_pct,
+    disable_trend=False,
+    allowed_coins=None,
+    allowed_timeframes=None,
 ):
     profile = dict(base_profile)
     profile["min_effective_ev"] = min_effective_ev
@@ -108,6 +113,12 @@ def run_once(
         candidates = []
 
     for market_id, question, coin, timeframe, price, ts in rows:
+        coin_key = (coin or "").lower()
+        if allowed_coins and coin_key not in allowed_coins:
+            continue
+        if allowed_timeframes and timeframe not in allowed_timeframes:
+            continue
+
         last_yes_price[market_id] = price
         cycle = ts // 60
         if current_cycle is None:
@@ -133,7 +144,7 @@ def run_once(
             move_pct = (cur_token - tr["token_entry"]) / tr["token_entry"]
             hold_sec = ts - tr["entry_ts"]
             max_hold_sec = MAX_HOLD_BY_TF_SEC.get(tr["timeframe"], 15 * 60)
-            if move_pct >= TP_PCT or move_pct <= -SL_PCT or hold_sec >= max_hold_sec:
+            if move_pct >= tp_pct or move_pct <= -sl_pct or hold_sec >= max_hold_sec:
                 closed_pnls.append(move_pct)
                 del active[market_id]
 
@@ -161,7 +172,10 @@ def run_once(
         if regime == "volatile":
             signal, confidence = None, 0.0
         elif timeframe in ["1h", "4h"] or regime == "trend":
-            signal, confidence = generate_trend_signal(features, profile, context)
+            if disable_trend:
+                signal, confidence = None, 0.0
+            else:
+                signal, confidence = generate_trend_signal(features, profile, context)
         else:
             signal, confidence = generate_mean_reversion_signal(
                 features, profile, context
@@ -253,6 +267,11 @@ def parse_int_list(raw):
     return [int(x.strip()) for x in raw.split(",") if x.strip()]
 
 
+def normalize_rows_limit(value):
+    # Treat 0 or negative values as "use all rows".
+    return 0 if value is None or value <= 0 else value
+
+
 def save_best_params(path, payload):
     target = Path(path)
     if not target.is_absolute():
@@ -275,6 +294,10 @@ def apply_best_to_config(best, profile_name):
     risk_profiles[profile_name]["signal_decay_lambda"] = best["signal_decay_lambda"]
     risk_profiles[profile_name]["max_signal_age_sec"] = best["max_signal_age_sec"]
     risk_profiles[profile_name]["max_entries_per_cycle"] = best["max_entries_per_cycle"]
+    if "tp_pct" in best:
+        risk_profiles[profile_name]["tp_pct"] = best["tp_pct"]
+    if "sl_pct" in best:
+        risk_profiles[profile_name]["sl_pct"] = best["sl_pct"]
 
     with cfg_path.open("w") as f:
         json.dump(cfg, f, indent=4)
@@ -305,10 +328,31 @@ def main():
         "--decay", default="0.010,0.020", help="CSV list for signal_decay_lambda grid"
     )
     parser.add_argument(
-        "--age", default="45,60,90", help="CSV list for max_signal_age_sec grid"
+        "--age", type=int, default=45, help="Fixed max_signal_age_sec value"
     )
     parser.add_argument(
         "--topn", default="2,3", help="CSV list for max_entries_per_cycle grid"
+    )
+    parser.add_argument(
+        "--tp", default=f"{TP_PCT}", help="CSV list for take-profit pct grid"
+    )
+    parser.add_argument(
+        "--sl", default=f"{SL_PCT}", help="CSV list for stop-loss pct grid"
+    )
+    parser.add_argument(
+        "--disable-trend",
+        action="store_true",
+        help="Skip trend regime entries (mean-reversion only)",
+    )
+    parser.add_argument(
+        "--coins",
+        default="",
+        help="CSV allowlist of coins (lowercase) to include in sweep",
+    )
+    parser.add_argument(
+        "--timeframes",
+        default="",
+        help="CSV allowlist of timeframes to include in sweep (e.g. 5m,15m)",
     )
     parser.add_argument(
         "--save-best",
@@ -328,31 +372,57 @@ def main():
     )
     args = parser.parse_args()
 
-    base_profile = RISK_PROFILES.get(args.profile, RISK_PROFILES.get("BALANCED", {}))
+    base_profile = RISK_PROFILES.get(args.profile, RISK_PROFILES.get("MAIN", {}))
     rows = load_rows()
     if not rows:
         print("No historical rows in DB.")
         return
-    if args.rows_limit > 0 and len(rows) > args.rows_limit:
-        rows = rows[-args.rows_limit :]
+    rows_limit = normalize_rows_limit(args.rows_limit)
+    print(
+        f"Sweep rows-limit: {'ALL' if rows_limit == 0 else rows_limit} | total_rows={len(rows)}"
+    )
+    if rows_limit > 0 and len(rows) > rows_limit:
+        rows = rows[-rows_limit:]
 
     grid_min_ev = parse_float_list(args.min_ev)
     grid_decay = parse_float_list(args.decay)
-    grid_age = parse_int_list(args.age)
     grid_topn = parse_int_list(args.topn)
+    grid_tp = parse_float_list(args.tp)
+    grid_sl = parse_float_list(args.sl)
+
+    allowed_coins = set([c.strip().lower() for c in args.coins.split(",") if c.strip()])
+    allowed_timeframes = set([t.strip() for t in args.timeframes.split(",") if t.strip()])
 
     results = []
-    combos = list(itertools.product(grid_min_ev, grid_decay, grid_age, grid_topn))
-    for i, (min_ev, decay, age, topn) in enumerate(combos, start=1):
-        print(
-            f"[{i}/{len(combos)}] min_ev={min_ev:.3f} decay={decay:.3f} age={age} topN={topn}"
+    combos = list(
+        itertools.product(
+            grid_min_ev, grid_decay, grid_topn, grid_tp, grid_sl
         )
-        metrics = run_once(rows, base_profile, min_ev, decay, age, topn)
+    )
+    for i, (min_ev, decay, topn, tp_pct, sl_pct) in enumerate(combos, start=1):
+        print(
+            f"[{i}/{len(combos)}] min_ev={min_ev:.3f} decay={decay:.3f} age={args.age} topN={topn} tp={tp_pct:.3f} sl={sl_pct:.3f}"
+        )
+        metrics = run_once(
+            rows,
+            base_profile,
+            min_ev,
+            decay,
+            args.age,
+            topn,
+            tp_pct,
+            sl_pct,
+            disable_trend=args.disable_trend,
+            allowed_coins=allowed_coins or None,
+            allowed_timeframes=allowed_timeframes or None,
+        )
         result = {
             "min_effective_ev": min_ev,
             "signal_decay_lambda": decay,
-            "max_signal_age_sec": age,
+            "max_signal_age_sec": args.age,
             "max_entries_per_cycle": topn,
+            "tp_pct": tp_pct,
+            "sl_pct": sl_pct,
             **metrics,
         }
         results.append(result)
@@ -369,14 +439,15 @@ def main():
     print(f"Sweep runs: {len(results)} | rows_used: {len(rows)}")
     print("=" * 98)
     print(
-        "rank | open/closed | win%  | expectancy | pf    | total_pnl | min_ev | decay | age | topN"
+        "rank | open/closed | win%  | expectancy | pf    | total_pnl | min_ev | decay | age | topN | tp  | sl"
     )
     print("=" * 98)
     for i, r in enumerate(ranked[: args.top], start=1):
         print(
             f"{i:>4} | {r['opened']:>4}/{r['trades']:<6} | {r['win_rate']:>5.1f} | {r['expectancy']:>10.4f} | "
             f"{r['profit_factor']:>5.2f} | {r['total_pnl']:>9.4f} | {r['min_effective_ev']:.3f} | "
-            f"{r['signal_decay_lambda']:.3f} | {r['max_signal_age_sec']:>3} | {r['max_entries_per_cycle']:>4}"
+            f"{r['signal_decay_lambda']:.3f} | {r['max_signal_age_sec']:>3} | {r['max_entries_per_cycle']:>4} | "
+            f"{r['tp_pct']:.3f} | {r['sl_pct']:.3f}"
         )
 
     best = ranked[0] if ranked else None

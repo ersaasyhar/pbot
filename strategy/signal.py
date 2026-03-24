@@ -22,6 +22,7 @@ def generate_trend_signal(features, profile, market_context=None):
         btc_up = market_context.get("btc_trending_up", True)
         btc_down = market_context.get("btc_trending_down", True)
         timeframe = market_context.get("timeframe", "5m")
+    coin = (market_context or {}).get("coin", "")
 
     # Thresholds from Profile
     z_thresh = profile.get("z_score_threshold", 1.2)
@@ -33,6 +34,10 @@ def generate_trend_signal(features, profile, market_context=None):
     max_pressure_no = profile.get("max_pressure_no", -0.15)
     trend_price_low = profile.get("trend_price_low", 0.20)
     trend_price_high = profile.get("trend_price_high", 0.45)
+    disable_btc_15m_trend = bool(profile.get("disable_btc_15m_trend", False))
+
+    if disable_btc_15m_trend and str(coin).lower() == "btc" and timeframe == "15m":
+        return None, 0.0
 
     # --- VOLATILITY REGIME & TIMEFRAME ADJUSTMENT ---
     rel_vol = features.get("rel_vol", 1.0)

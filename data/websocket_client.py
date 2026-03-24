@@ -47,7 +47,11 @@ class PolymarketWS:
 
                     # 3. LISTEN LOOP
                     while True:
-                        message = await self.ws.recv()
+                        try:
+                            message = await asyncio.wait_for(self.ws.recv(), timeout=30)
+                        except asyncio.TimeoutError:
+                            logger.warning("WS recv timeout: no messages in 30s; reconnecting")
+                            break
                         if message == "PONG":
                             continue
 
@@ -65,6 +69,10 @@ class PolymarketWS:
                         except Exception as e:
                             logger.debug(f"WS message parse/callback error: {e}")
                             continue
+                    try:
+                        heartbeat_task.cancel()
+                    except Exception:
+                        pass
 
             except Exception as e:
                 logger.warning(f"WS Connection Error: {e}. Reconnecting in 5s...")

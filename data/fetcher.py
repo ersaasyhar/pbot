@@ -2,13 +2,16 @@ import asyncio
 import aiohttp
 import time
 import json
-from app.config import ACTIVE_COINS
+from app.config import (
+    ACTIVE_COINS,
+    RISK_PROFILES,
+    SELECTED_RISK_PROFILE_NAME,
+)
 from app.logger import get_logger
 
 BASE_URL = "https://gamma-api.polymarket.com"
 
-COINS = ACTIVE_COINS
-TIMEFRAMES = {
+BASE_TIMEFRAMES = {
     "5m": 300,
     "15m": 900,
     "1h": 3600,
@@ -17,6 +20,31 @@ TIMEFRAMES = {
 
 MAX_RETRIES = 3
 logger = get_logger()
+
+
+def _resolve_discovery_universe():
+    profile = RISK_PROFILES.get(SELECTED_RISK_PROFILE_NAME, {})
+
+    allowed_coins = profile.get("trade_allowed_coins", [])
+    if allowed_coins:
+        coins = [str(c).lower() for c in allowed_coins]
+    else:
+        coins = [str(c).lower() for c in ACTIVE_COINS]
+
+    allowed_tfs = profile.get("trade_allowed_timeframes", [])
+    if allowed_tfs:
+        tf_keys = [str(tf) for tf in allowed_tfs if str(tf) in BASE_TIMEFRAMES]
+    else:
+        tf_keys = list(BASE_TIMEFRAMES.keys())
+
+    timeframes = {k: BASE_TIMEFRAMES[k] for k in tf_keys}
+    return coins, timeframes
+
+
+COINS, TIMEFRAMES = _resolve_discovery_universe()
+logger.info(
+    f"🌐 Discovery universe | coins={COINS} | timeframes={list(TIMEFRAMES.keys())}"
+)
 
 
 # ---------------------------
@@ -35,9 +63,13 @@ def generate_candidate_slugs():
     for coin in COINS:
         for tf, seconds in TIMEFRAMES.items():
             current_epoch = get_epoch(seconds)
-            prev_epoch = current_epoch - seconds
-            candidates.append((coin, tf, f"{coin}-updown-{tf}-{current_epoch}"))
-            candidates.append((coin, tf, f"{coin}-updown-{tf}-{prev_epoch}"))
+            slug_candidates = [f"{coin}-updown-{tf}-{current_epoch}"]
+            for offset in range(1, 4):
+                try_epoch = current_epoch - (offset * seconds)
+                slug_candidates.append(f"{coin}-updown-{tf}-{try_epoch}")
+            # Some markets open early; include next epoch as a safety net.
+            slug_candidates.append(f"{coin}-updown-{tf}-{current_epoch + seconds}")
+            candidates.append((coin, tf, slug_candidates))
     return candidates
 
 
@@ -47,7 +79,7 @@ def generate_candidate_slugs():
 async def safe_get(session, url, params):
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            async with session.get(url, params=params, timeout=10) as res:
+            async with session.get(url, params=params, timeout=15) as res:
                 if res.status == 200:
                     return await res.json()
                 if attempt == MAX_RETRIES:
@@ -91,6 +123,7 @@ def parse_market(event, coin, timeframe, tf_seconds):
                     parsed = json.loads(value)
                     return parsed if isinstance(parsed, list) else None
                 except Exception:
+                    logger.debug("parse_jsonish: failed to parse JSON string")
                     return None
             return None
 
@@ -115,7 +148,7 @@ def parse_market(event, coin, timeframe, tf_seconds):
                         if 0 < no_px < 1:
                             chosen_idx = i
                     except Exception:
-                        pass
+                        logger.debug("parse_market: invalid NO price")
                     break
         if chosen_idx is None:
             chosen_idx = 0
@@ -133,6 +166,7 @@ def parse_market(event, coin, timeframe, tf_seconds):
                         px = round(1.0 - px, 6)
                     price = px
             except Exception:
+                logger.debug("parse_market: invalid outcome price")
                 price = None
 
         if price is None:
@@ -140,6 +174,7 @@ def parse_market(event, coin, timeframe, tf_seconds):
             try:
                 last_trade_price = float(last_trade_price)
             except Exception:
+                logger.debug("parse_market: invalid lastTradePrice")
                 last_trade_price = None
             if last_trade_price and 0 < last_trade_price <= 1:
                 price = last_trade_price
@@ -167,6 +202,7 @@ def parse_market(event, coin, timeframe, tf_seconds):
                 dt = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
                 end_time = int(dt.timestamp())
             except Exception:
+                logger.debug("parse_market: invalid endDate")
                 end_time = 0
 
         markets.append(
@@ -196,36 +232,48 @@ async def fetch_markets_async():
     all_markets = []
     seen = set()
     candidates = generate_candidate_slugs()
+    expected_keys = {f"{coin}-{tf}" for coin, tf, _ in candidates}
 
     async with aiohttp.ClientSession() as session:
-        # We need tf_seconds to pass to parse_market
-        tasks = []
-        for coin, tf, slug in candidates:
-            tasks.append(fetch_event(session, coin, tf, slug))
-
-        results = await asyncio.gather(*tasks)
-
-        for result in results:
-            if not result:
-                continue
-            coin, tf, event = result
+        for coin, tf, slugs in candidates:
             key = f"{coin}-{tf}"
             if key in seen:
                 continue
 
             tf_seconds = TIMEFRAMES.get(tf, 300)
-            markets = parse_market(event, coin, tf, tf_seconds)
-            if markets:
+            per_key_markets = []
+            seen_condition_ids = set()
+            for slug in slugs:
+                result = await fetch_event(session, coin, tf, slug)
+                if not result:
+                    continue
+                _, _, event = result
+                markets = parse_market(event, coin, tf, tf_seconds)
+                for market in markets:
+                    condition_id = market.get("condition_id")
+                    if condition_id and condition_id in seen_condition_ids:
+                        continue
+                    if condition_id:
+                        seen_condition_ids.add(condition_id)
+                    per_key_markets.append(market)
+
+            if per_key_markets:
                 now_ts = int(time.time())
-                active_future = [m for m in markets if m.get("end_time", 0) > now_ts]
+                active_future = [
+                    m for m in per_key_markets if m.get("end_time", 0) > now_ts
+                ]
                 if active_future:
                     # Prefer the nearest active window (current tradable cycle).
                     selected = min(active_future, key=lambda x: x["end_time"])
                 else:
-                    # Fallback: highest-volume market from this event payload.
-                    selected = max(markets, key=lambda x: x.get("volume", 0.0))
+                    # Fallback: highest-volume market from this discovery batch.
+                    selected = max(per_key_markets, key=lambda x: x.get("volume", 0.0))
                 all_markets.append(selected)
                 seen.add(key)
+
+        missing = sorted(expected_keys - seen)
+        if missing:
+            logger.warning(f"fetch_markets_async: missing markets for {missing}")
 
     all_markets.sort(key=lambda x: x["volume"], reverse=True)
     return all_markets

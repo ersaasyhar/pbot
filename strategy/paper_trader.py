@@ -1,34 +1,22 @@
-import json
-import os
 from datetime import datetime
+from data.storage import (
+    upsert_paper_trade_entry,
+    close_paper_trade,
+    load_paper_portfolio_snapshot,
+    adjust_portfolio_balance,
+    get_market_end_time,
+    get_yes_price_at_close,
+)
+from app.logger import get_logger
 from app.config import (
     SIZING_PROFILES,
     RISK_PROFILES,
     SELECTED_RISK_PROFILE_NAME,
 )
 
-# Path to virtual state
-STATE_PATH = "db/paper_portfolio.json"
-
 
 def load_portfolio():
-    if not os.path.exists(STATE_PATH):
-        return {
-            "balance": 1000.0,
-            "high_water_mark": 1000.0,
-            "active_trades": {},
-            "history": [],
-        }
-    with open(STATE_PATH, "r") as f:
-        data = json.load(f)
-        if "high_water_mark" not in data:
-            data["high_water_mark"] = max(1000.0, data.get("balance", 1000.0))
-        return data
-
-
-def save_portfolio(data):
-    with open(STATE_PATH, "w") as f:
-        json.dump(data, f, indent=4)
+    return load_paper_portfolio_snapshot(history_limit=5000)
 
 
 def calculate_stake(portfolio, sizing_profile_name, confidence=1.0):
@@ -60,6 +48,48 @@ def calculate_stake(portfolio, sizing_profile_name, confidence=1.0):
     return round(base_value * confidence * drawdown_penalty, 2)
 
 
+def _risk_profile_for_timeframe(timeframe):
+    base = RISK_PROFILES.get(SELECTED_RISK_PROFILE_NAME, {}) or {}
+    overrides = (base.get("timeframe_overrides", {}) or {}).get(timeframe, {}) or {}
+    if not overrides:
+        return base
+    merged = dict(base)
+    merged.update(overrides)
+    return merged
+
+
+def _resolve_stale_exit(trade, end_time):
+    entry_trade_price = float(trade["entry_price"])
+    entry_cost = float(trade["entry_cost"])
+    yes_price, source = get_yes_price_at_close(trade.get("market_id"), end_time)
+    if yes_price is None:
+        yes_price = float(
+            trade.get(
+                "yes_price_at_entry",
+                entry_trade_price
+                if trade["side"] == "BUY YES"
+                else round(1.0 - entry_trade_price, 4),
+            )
+        )
+        source = "ENTRY_FALLBACK"
+
+    exit_trade_price = (
+        yes_price if trade["side"] == "BUY YES" else round(1.0 - yes_price, 4)
+    )
+    move_pct = (exit_trade_price - entry_trade_price) / entry_trade_price
+    total_pnl = round(move_pct * entry_cost, 2)
+    total_pnl = max(total_pnl, -entry_cost)
+    payout = round(entry_cost + total_pnl, 2)
+    return {
+        "exit_price": round(exit_trade_price, 4),
+        "yes_price_at_exit": round(yes_price, 4),
+        "pnl": total_pnl,
+        "move_pct": round(move_pct * 100, 2),
+        "exit_reason": f"STALE_TIMEOUT_{source}",
+        "payout": payout,
+    }
+
+
 def execute_virtual_trade(
     market_id,
     question,
@@ -72,6 +102,7 @@ def execute_virtual_trade(
     effective_ev=None,
     regime=None,
     signal_age_sec=None,
+    end_time=None,
 ):
     """
     v25: DYNAMIC SIZING + CIRCUIT BREAKER
@@ -129,8 +160,12 @@ def execute_virtual_trade(
     if entry_cost < 1.0 or entry_cost > portfolio["balance"]:
         return False
 
+    now = datetime.now()
+    trade_id = f"{market_id}:{int(now.timestamp() * 1000)}"
     num_shares = round(entry_cost / trade_price, 4)
-    portfolio["active_trades"][market_id] = {
+    trade_payload = {
+        "trade_id": trade_id,
+        "market_id": market_id,
         "question": question,
         "side": side,
         "confidence": confidence,
@@ -143,15 +178,21 @@ def execute_virtual_trade(
         "shares": num_shares,
         "coin": coin,
         "timeframe": timeframe,
-        "entry_at": str(datetime.now()),
+        "entry_at": str(now),
+        "end_time": int(end_time) if end_time else None,
     }
+    balance_state = adjust_portfolio_balance(-entry_cost)
+    if balance_state is None:
+        return False
+    try:
+        upsert_paper_trade_entry(trade_payload)
+    except Exception as e:
+        get_logger().warning(f"paper_trader: failed to upsert entry: {e}")
 
-    portfolio["balance"] = round(portfolio["balance"] - entry_cost, 2)
     print(
         f"📄 SNIPER TRADE: {side} ({int(confidence * 100)}%) {question[:30]}... "
         f"| Stake: ${round(entry_cost, 2)} @ {trade_price}"
     )
-    save_portfolio(portfolio)
     return True
 
 
@@ -162,12 +203,6 @@ def update_paper_trades(current_prices, market_state=None):
     - 5% Stop Loss (Very tight for capital preservation)
     """
     portfolio = load_portfolio()
-    selected_risk = RISK_PROFILES.get(SELECTED_RISK_PROFILE_NAME, {})
-    TP_PCT = float(selected_risk.get("tp_pct", 0.12))
-    SL_PCT = float(selected_risk.get("sl_pct", 0.08))
-
-    closed_any = False
-    to_delete = []
     max_hold_by_tf_sec = {
         "5m": 15 * 60,
         "15m": 45 * 60,
@@ -179,39 +214,92 @@ def update_paper_trades(current_prices, market_state=None):
         now = datetime.now()
         entry_at = datetime.fromisoformat(trade["entry_at"])
         hold_seconds = (now - entry_at).total_seconds()
-        max_hold_sec = max_hold_by_tf_sec.get(trade.get("timeframe", "5m"), 15 * 60)
+        timeframe = trade.get("timeframe", "5m")
+        selected_risk = _risk_profile_for_timeframe(timeframe)
+        TP_PCT = float(selected_risk.get("tp_pct", 0.12))
+        SL_PCT = float(selected_risk.get("sl_pct", 0.08))
+        max_hold_sec = max_hold_by_tf_sec.get(timeframe, 15 * 60)
+        end_time = trade.get("end_time")
+        if end_time is None and market_state and m_id in market_state:
+            end_time = market_state[m_id].get("end_time")
+        if end_time is None:
+            end_time = get_market_end_time(m_id)
+        entry_ts = int(entry_at.timestamp())
+        if end_time is None:
+            # Fallback: approximate session end using entry time + timeframe window.
+            try:
+                end_time = entry_ts + int(max_hold_sec)
+            except Exception as e:
+                get_logger().warning(f"paper_trader: end_time fallback failed: {e}")
+                end_time = None
+        # Guard: if end_time is behind entry, use entry-based window instead.
+        if end_time and int(end_time) <= entry_ts:
+            end_time = entry_ts + int(max_hold_sec)
+        if end_time:
+            trade["end_time"] = int(end_time)
+        if end_time and now.timestamp() > float(end_time) + 30:
+            # Event ended; force close and release balance.
+            resolved = _resolve_stale_exit(trade, end_time)
+            trade["exit_price"] = resolved["exit_price"]
+            trade["yes_price_at_exit"] = resolved["yes_price_at_exit"]
+            trade["exit_at"] = str(now)
+            trade["pnl"] = resolved["pnl"]
+            trade["move_pct"] = resolved["move_pct"]
+            trade["hold_seconds"] = int(hold_seconds)
+            trade["exit_reason"] = resolved["exit_reason"]
+            trade["market_id"] = m_id
+
+            adjust_portfolio_balance(resolved["payout"])
+            try:
+                close_paper_trade(trade)
+            except Exception as e:
+                get_logger().warning(f"paper_trader: failed to close trade: {e}")
+            print(
+                f"📄 PAPER EXIT: ↩ EARLY_EXIT:{trade['exit_reason']} | PnL=${trade['pnl']} ({trade['move_pct']}%)"
+            )
+            continue
 
         if m_id not in current_prices:
             # Market is no longer streaming (often ended). Avoid stale lock:
             # force-close once the trade exceeded its max hold horizon.
-            if hold_seconds >= max_hold_sec:
-                entry_trade_price = float(trade["entry_price"])
-                entry_yes_price = float(
-                    trade.get(
-                        "yes_price_at_entry",
-                        entry_trade_price
-                        if trade["side"] == "BUY YES"
-                        else round(1.0 - entry_trade_price, 4),
-                    )
-                )
-                trade["exit_price"] = round(entry_trade_price, 4)
-                trade["yes_price_at_exit"] = round(entry_yes_price, 4)
+            if end_time and now.timestamp() > float(end_time) + 30:
+                resolved = _resolve_stale_exit(trade, end_time)
+                trade["exit_price"] = resolved["exit_price"]
+                trade["yes_price_at_exit"] = resolved["yes_price_at_exit"]
                 trade["exit_at"] = str(now)
-                trade["pnl"] = 0.0
-                trade["move_pct"] = 0.0
+                trade["pnl"] = resolved["pnl"]
+                trade["move_pct"] = resolved["move_pct"]
                 trade["hold_seconds"] = int(hold_seconds)
-                trade["exit_reason"] = "STALE_TIMEOUT"
+                trade["exit_reason"] = resolved["exit_reason"]
+                trade["market_id"] = m_id
 
-                portfolio["history"].append(trade)
-                portfolio["balance"] = round(
-                    portfolio["balance"] + float(trade["entry_cost"]), 2
+                adjust_portfolio_balance(resolved["payout"])
+                try:
+                    close_paper_trade(trade)
+                except Exception as e:
+                    get_logger().warning(f"paper_trader: failed to close trade: {e}")
+                print(
+                    f"📄 PAPER EXIT: ↩ EARLY_EXIT:{trade['exit_reason']} | PnL=${trade['pnl']} ({trade['move_pct']}%)"
                 )
-                if portfolio["balance"] > portfolio.get("high_water_mark", 1000.0):
-                    portfolio["high_water_mark"] = portfolio["balance"]
+            elif hold_seconds >= max_hold_sec:
+                resolved = _resolve_stale_exit(trade, end_time)
+                trade["exit_price"] = resolved["exit_price"]
+                trade["yes_price_at_exit"] = resolved["yes_price_at_exit"]
+                trade["exit_at"] = str(now)
+                trade["pnl"] = resolved["pnl"]
+                trade["move_pct"] = resolved["move_pct"]
+                trade["hold_seconds"] = int(hold_seconds)
+                trade["exit_reason"] = resolved["exit_reason"]
+                trade["market_id"] = m_id
 
-                to_delete.append(m_id)
-                closed_any = True
-                print("📄 PAPER EXIT: ↩ EARLY_EXIT:STALE_TIMEOUT | PnL=$0.0 (0.0%)")
+                adjust_portfolio_balance(resolved["payout"])
+                try:
+                    close_paper_trade(trade)
+                except Exception as e:
+                    get_logger().warning(f"paper_trader: failed to close trade: {e}")
+                print(
+                    f"📄 PAPER EXIT: ↩ EARLY_EXIT:{trade['exit_reason']} | PnL=${trade['pnl']} ({trade['move_pct']}%)"
+                )
             continue
 
         cur_yes_price = current_prices[m_id]
@@ -229,7 +317,10 @@ def update_paper_trades(current_prices, market_state=None):
         move_pct = (cur_trade_price - entry) / entry
 
         early_reason = None
-        if hold_seconds >= max_hold_sec:
+        if end_time:
+            if now.timestamp() > float(end_time) + 30:
+                early_reason = "TIME"
+        elif hold_seconds >= max_hold_sec:
             early_reason = "TIME"
 
         if market_state and m_id in market_state:
@@ -262,25 +353,16 @@ def update_paper_trades(current_prices, market_state=None):
                 trade["exit_reason"] = early_reason
             else:
                 trade["exit_reason"] = "TP" if move_pct >= TP_PCT else "SL"
+            trade["market_id"] = m_id
 
-            portfolio["history"].append(trade)
-            portfolio["balance"] = round(portfolio["balance"] + payout, 2)
-
-            # Update High Water Mark
-            if portfolio["balance"] > portfolio.get("high_water_mark", 1000.0):
-                portfolio["high_water_mark"] = portfolio["balance"]
-
-            to_delete.append(m_id)
-            closed_any = True
+            adjust_portfolio_balance(payout)
+            try:
+                close_paper_trade(trade)
+            except Exception as e:
+                get_logger().warning(f"paper_trader: failed to close trade: {e}")
 
             if early_reason:
                 status = f"↩ EARLY_EXIT:{early_reason}"
             else:
                 status = "💰 PROFIT" if total_pnl > 0 else "🛑 STOP"
             print(f"📄 PAPER EXIT: {status} | PnL=${total_pnl} ({trade['move_pct']}%)")
-
-    for m_id in to_delete:
-        del portfolio["active_trades"][m_id]
-
-    if closed_any:
-        save_portfolio(portfolio)

@@ -1,30 +1,20 @@
 from flask import Flask, render_template, jsonify, request, redirect, session, url_for
-import json
 import os
 import statistics
 from dotenv import load_dotenv
 from app.config import SELECTED_RISK_PROFILE_NAME
+from data.storage import load_paper_portfolio_snapshot
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-fallback-key")
 
-PORTFOLIO_PATH = "db/paper_portfolio.json"
 DASHBOARD_PASS = os.getenv("DASHBOARD_PASSWORD", "admin")
 
 
 def get_data():
-    if not os.path.exists(PORTFOLIO_PATH):
-        data = {
-            "balance": 1000.0,
-            "high_water_mark": 1000.0,
-            "active_trades": {},
-            "history": [],
-        }
-    else:
-        with open(PORTFOLIO_PATH, "r") as f:
-            data = json.load(f)
+    data = load_paper_portfolio_snapshot(history_limit=5000)
 
     # Calculate Metrics
     history = data.get("history", [])
@@ -48,7 +38,7 @@ def get_data():
     losses = [t for t in history if t.get("pnl", 0) <= 0]
 
     total_pnl = sum(t.get("pnl", 0) for t in history)
-    initial_balance = 1000.0
+    initial_balance = float(data.get("initial_balance", 1000.0) or 1000.0)
     roi = (total_pnl / initial_balance) * 100
 
     win_rate = (len(wins) / len(history) * 100) if history else 0
