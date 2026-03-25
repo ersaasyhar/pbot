@@ -122,7 +122,7 @@ def main():
 
     print(
         f"🧪 WALK-FORWARD | profile={args.profile} | rows={n} | folds={args.folds} | "
-        f"grid={len(grid_min_ev)*len(grid_decay)*len(grid_age)*len(grid_topn)} combos"
+        f"grid={len(grid_min_ev) * len(grid_decay) * len(grid_age) * len(grid_topn)} combos"
     )
 
     fold_results = []
@@ -204,4 +204,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

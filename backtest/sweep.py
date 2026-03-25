@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 from app.config import RISK_PROFILES, SELECTED_RISK_PROFILE_NAME, CONFIG_PATH
-from data.storage import DB_PATH
+from backtest.common import detect_regime
+from data.storage import DB_PATH, init_db
 from features.builder import build_features
 from strategy.signal import generate_mean_reversion_signal, generate_trend_signal
 
@@ -29,18 +30,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BEST_PARAMS_PATH = str(PROJECT_ROOT / "db" / "best_params.json")
 
 
-def detect_regime(features, timeframe):
-    rel_vol = features.get("rel_vol", 1.0)
-    momentum_pct = abs(features.get("momentum_pct", 0.0))
-    z_abs = abs(features.get("z_score", 0.0))
-    if rel_vol >= 1.35:
-        return "volatile"
-    if timeframe in ["1h", "4h"]:
-        return "trend" if z_abs >= 0.8 or momentum_pct >= 0.02 else "range"
-    return "trend" if z_abs >= 1.5 or momentum_pct >= 0.03 else "range"
-
-
 def load_rows():
+    init_db()
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=30)
     conn.execute("PRAGMA busy_timeout=5000")
     cur = conn.cursor()
@@ -168,7 +159,7 @@ def run_once(
             "timeframe": timeframe,
         }
 
-        regime = detect_regime(features, timeframe)
+        regime = detect_regime(features, timeframe, volatile_threshold=1.35)
         if regime == "volatile":
             signal, confidence = None, 0.0
         elif timeframe in ["1h", "4h"] or regime == "trend":
@@ -391,13 +382,13 @@ def main():
     grid_sl = parse_float_list(args.sl)
 
     allowed_coins = set([c.strip().lower() for c in args.coins.split(",") if c.strip()])
-    allowed_timeframes = set([t.strip() for t in args.timeframes.split(",") if t.strip()])
+    allowed_timeframes = set(
+        [t.strip() for t in args.timeframes.split(",") if t.strip()]
+    )
 
     results = []
     combos = list(
-        itertools.product(
-            grid_min_ev, grid_decay, grid_topn, grid_tp, grid_sl
-        )
+        itertools.product(grid_min_ev, grid_decay, grid_topn, grid_tp, grid_sl)
     )
     for i, (min_ev, decay, topn, tp_pct, sl_pct) in enumerate(combos, start=1):
         print(

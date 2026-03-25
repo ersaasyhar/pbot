@@ -1,5 +1,6 @@
 import json
 import os
+from app.config_validation import validate_config
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CONFIG_PATH = os.getenv("BOT_CONFIG_PATH", os.path.join(BASE_DIR, "config.json"))
@@ -7,13 +8,27 @@ CONFIG_PATH = os.getenv("BOT_CONFIG_PATH", os.path.join(BASE_DIR, "config.json")
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
-        return {
+        default_cfg = {
             "bot": {"fetch_interval": 5, "top_k": 10, "active_coins": ["btc", "eth"]},
-            "risk_profiles": {"SELECTED": "BALANCED"},
-            "sizing_profiles": {"SELECTED": "FIXED"},
+            "risk_profiles": {
+                "SELECTED": "BALANCED",
+                "BALANCED": {
+                    "tp_pct": 0.10,
+                    "sl_pct": 0.05,
+                    "min_effective_ev": 0.0,
+                    "max_signal_age_sec": 60,
+                    "max_entries_per_cycle": 1,
+                },
+            },
+            "sizing_profiles": {
+                "SELECTED": "FIXED",
+                "FIXED": {"type": "fixed", "value": 10.0},
+            },
         }
+        return validate_config(default_cfg)
     with open(CONFIG_PATH, "r") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    return validate_config(cfg)
 
 
 _raw_config = load_config()

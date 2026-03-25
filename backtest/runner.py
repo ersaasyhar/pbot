@@ -1,10 +1,11 @@
 import sqlite3
 import math
 from collections import defaultdict
+from backtest.common import detect_regime, profile_for_timeframe
 from features.builder import build_features
 from strategy.signal import generate_trend_signal, generate_mean_reversion_signal
 from backtest.simulator import Trade
-from data.storage import DB_PATH
+from data.storage import DB_PATH, init_db
 from app.config import RISK_PROFILES, SELECTED_RISK_PROFILE_NAME
 
 # Use the same unified profile as the live bot
@@ -12,32 +13,15 @@ PROFILE_NAME = SELECTED_RISK_PROFILE_NAME
 PROFILE = RISK_PROFILES.get(PROFILE_NAME, RISK_PROFILES.get("MAIN", {}))
 
 
-def profile_for_timeframe(timeframe):
-    base = PROFILE or {}
-    overrides = (base.get("timeframe_overrides", {}) or {}).get(timeframe, {}) or {}
-    if not overrides:
-        return base
-    merged = dict(base)
-    merged.update(overrides)
-    return merged
-def detect_regime(features, timeframe):
-    rel_vol = features.get("rel_vol", 1.0)
-    momentum_pct = abs(features.get("momentum_pct", 0.0))
-    z_abs = abs(features.get("z_score", 0.0))
-
-    if rel_vol >= 1.8:
-        return "volatile"
-    if timeframe in ["1h", "4h"]:
-        return "trend" if z_abs >= 0.8 or momentum_pct >= 0.02 else "range"
-    return "trend" if z_abs >= 1.5 or momentum_pct >= 0.03 else "range"
-
-
 def backtest():
     print(f"📈 Running Backtest using {PROFILE_NAME} profile (Unified Config)...")
+    init_db()
     profile = PROFILE
     tp_pct = float(profile.get("tp_pct", 0.10))
     sl_pct = float(profile.get("sl_pct", 0.05))
-    allowed_coins = set([str(c).lower() for c in profile.get("trade_allowed_coins", [])])
+    allowed_coins = set(
+        [str(c).lower() for c in profile.get("trade_allowed_coins", [])]
+    )
     allowed_timeframes = set(
         [str(tf) for tf in profile.get("trade_allowed_timeframes", [])]
     )
@@ -130,7 +114,7 @@ def backtest():
                 "timeframe": timeframe,
                 "coin": coin_key,
             }
-            profile_tf = profile_for_timeframe(timeframe)
+            profile_tf = profile_for_timeframe(PROFILE, timeframe)
             regime = detect_regime(features, timeframe)
             if regime == "volatile":
                 signal, confidence = None, 0.0
@@ -156,7 +140,7 @@ def backtest():
             slot = active_trades[market_id]
             trade = slot["trade"]
             pnl = trade.pnl_pct(price)
-            profile_tf = profile_for_timeframe(slot["timeframe"])
+            profile_tf = profile_for_timeframe(PROFILE, slot["timeframe"])
             tp_pct = float(profile_tf.get("tp_pct", 0.10))
             sl_pct = float(profile_tf.get("sl_pct", 0.05))
             if pnl >= tp_pct or pnl <= -sl_pct:

@@ -30,7 +30,9 @@ async def fetch_open_interest_batch(condition_ids):
                         data = await res.json()
                         if isinstance(data, list) and len(data) > 0:
                             return cid, float(data[0].get("value", 0))
-                    logger.debug(f"open_interest non-200 status={res.status} market={cid}")
+                    logger.debug(
+                        f"open_interest non-200 status={res.status} market={cid}"
+                    )
             except Exception as e:
                 logger.debug(f"open_interest fetch failed market={cid}: {e}")
             return cid, 0.0

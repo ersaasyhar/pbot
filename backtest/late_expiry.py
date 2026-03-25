@@ -2,7 +2,7 @@ import argparse
 import sqlite3
 from collections import defaultdict
 
-from data.storage import DB_PATH
+from data.storage import DB_PATH, init_db
 
 
 def clamp(x, lo, hi):
@@ -18,6 +18,7 @@ def estimate_slippage(spread, depth_top5, stake_usd, latency_ms, extra_slippage)
 
 
 def load_end_times(coin_filter=None, timeframe_filter=None):
+    init_db()
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=30)
     conn.execute("PRAGMA busy_timeout=5000")
     cur = conn.cursor()
@@ -39,10 +40,15 @@ def load_end_times(coin_filter=None, timeframe_filter=None):
     cur.execute(sql, params)
     rows = cur.fetchall()
     conn.close()
-    return {str(market_id): int(end_time) for market_id, end_time in rows if market_id and end_time}
+    return {
+        str(market_id): int(end_time)
+        for market_id, end_time in rows
+        if market_id and end_time
+    }
 
 
 def load_ws_rows(coin_filter=None, timeframe_filter=None, rows_limit=0):
+    init_db()
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=30)
     conn.execute("PRAGMA busy_timeout=5000")
     cur = conn.cursor()
@@ -71,7 +77,9 @@ def load_ws_rows(coin_filter=None, timeframe_filter=None, rows_limit=0):
     return rows
 
 
-def token_entry_price(side, bid, ask, mid, spread, depth, stake_usd, latency_ms, extra_slippage):
+def token_entry_price(
+    side, bid, ask, mid, spread, depth, stake_usd, latency_ms, extra_slippage
+):
     if (not bid or bid <= 0) and (not ask or ask <= 0):
         if not mid or mid <= 0:
             return None
@@ -85,7 +93,9 @@ def token_entry_price(side, bid, ask, mid, spread, depth, stake_usd, latency_ms,
     return clamp((1.0 - float(bid)) + slip, 0.01, 0.99)
 
 
-def token_exit_price(side, bid, ask, mid, spread, depth, stake_usd, latency_ms, extra_slippage):
+def token_exit_price(
+    side, bid, ask, mid, spread, depth, stake_usd, latency_ms, extra_slippage
+):
     if (not bid or bid <= 0) and (not ask or ask <= 0):
         if not mid or mid <= 0:
             return None
@@ -263,24 +273,60 @@ def print_breakdown(title, bucket):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Late-expiry dominance replay on ws_ticks.")
+    parser = argparse.ArgumentParser(
+        description="Late-expiry dominance replay on ws_ticks."
+    )
     parser.add_argument("--coins", default="btc", help="CSV coin allowlist")
-    parser.add_argument("--timeframes", default="5m,15m", help="CSV timeframe allowlist")
-    parser.add_argument("--rows-limit", type=int, default=200000, help="Latest N ws rows, 0 means all")
-    parser.add_argument("--entry-low", type=float, default=0.80, help="Lower bound for dominant side price")
-    parser.add_argument("--entry-high", type=float, default=0.90, help="Upper bound for dominant side price")
-    parser.add_argument("--seconds-to-expiry", type=int, default=45, help="Only enter this many seconds before end")
-    parser.add_argument("--max-spread", type=float, default=0.03, help="Max spread filter")
-    parser.add_argument("--min-depth", type=float, default=100.0, help="Min depth_top5 filter")
-    parser.add_argument("--stake-usd", type=float, default=10.0, help="Stake used for PnL reporting")
-    parser.add_argument("--latency-ms", type=int, default=250, help="Latency proxy in milliseconds")
-    parser.add_argument("--extra-slippage", type=float, default=0.001, help="Extra slippage in token price units")
+    parser.add_argument(
+        "--timeframes", default="5m,15m", help="CSV timeframe allowlist"
+    )
+    parser.add_argument(
+        "--rows-limit", type=int, default=200000, help="Latest N ws rows, 0 means all"
+    )
+    parser.add_argument(
+        "--entry-low",
+        type=float,
+        default=0.80,
+        help="Lower bound for dominant side price",
+    )
+    parser.add_argument(
+        "--entry-high",
+        type=float,
+        default=0.90,
+        help="Upper bound for dominant side price",
+    )
+    parser.add_argument(
+        "--seconds-to-expiry",
+        type=int,
+        default=45,
+        help="Only enter this many seconds before end",
+    )
+    parser.add_argument(
+        "--max-spread", type=float, default=0.03, help="Max spread filter"
+    )
+    parser.add_argument(
+        "--min-depth", type=float, default=100.0, help="Min depth_top5 filter"
+    )
+    parser.add_argument(
+        "--stake-usd", type=float, default=10.0, help="Stake used for PnL reporting"
+    )
+    parser.add_argument(
+        "--latency-ms", type=int, default=250, help="Latency proxy in milliseconds"
+    )
+    parser.add_argument(
+        "--extra-slippage",
+        type=float,
+        default=0.001,
+        help="Extra slippage in token price units",
+    )
     args = parser.parse_args()
 
     coin_filter = set([c.strip().lower() for c in args.coins.split(",") if c.strip()])
     tf_filter = set([t.strip() for t in args.timeframes.split(",") if t.strip()])
     end_times = load_end_times(coin_filter=coin_filter, timeframe_filter=tf_filter)
-    rows = load_ws_rows(coin_filter=coin_filter, timeframe_filter=tf_filter, rows_limit=args.rows_limit)
+    rows = load_ws_rows(
+        coin_filter=coin_filter, timeframe_filter=tf_filter, rows_limit=args.rows_limit
+    )
     if not rows:
         print("❌ No ws_ticks rows found for requested filter.")
         return

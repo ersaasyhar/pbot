@@ -1,7 +1,7 @@
 import asyncio
-from data.storage import init_db
+from app.bootstrap import bootstrap_runtime
 from core.engine import run
 
 if __name__ == "__main__":
-    init_db()
+    bootstrap_runtime(init_database=True)
     asyncio.run(run())

@@ -50,16 +50,19 @@ class PolymarketWS:
                         try:
                             message = await asyncio.wait_for(self.ws.recv(), timeout=30)
                         except asyncio.TimeoutError:
-                            logger.warning("WS recv timeout: no messages in 30s; reconnecting")
+                            logger.warning(
+                                "WS recv timeout: no messages in 30s; reconnecting"
+                            )
                             break
                         if message == "PONG":
                             continue
 
                         try:
                             data = json.loads(message)
-                            if isinstance(data, dict) and data.get(
-                                "type"
-                            ) == "subscription_success":
+                            if (
+                                isinstance(data, dict)
+                                and data.get("type") == "subscription_success"
+                            ):
                                 continue
 
                             events = data if isinstance(data, list) else [data]

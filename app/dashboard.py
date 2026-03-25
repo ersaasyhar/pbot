@@ -44,9 +44,7 @@ def get_data():
     win_rate = (len(wins) / len(history) * 100) if history else 0
     expectancy = (total_pnl / len(history)) if history else 0.0
     zero_hold_count = sum(1 for t in history if int(t.get("hold_seconds", 0)) == 0)
-    zero_hold_exit_ratio = (
-        (zero_hold_count / len(history) * 100.0) if history else 0.0
-    )
+    zero_hold_exit_ratio = (zero_hold_count / len(history) * 100.0) if history else 0.0
 
     # Reconstruct equity from closed-trade pnl stream to estimate drawdown.
     equity = initial_balance

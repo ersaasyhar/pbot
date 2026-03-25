@@ -9,7 +9,8 @@ from app.config import (
     SIZING_PROFILES,
     SELECTED_SIZING_PROFILE_NAME,
 )
-from data.storage import DB_PATH
+from backtest.common import detect_regime
+from data.storage import DB_PATH, init_db
 from features.builder import build_features
 from strategy.signal import generate_mean_reversion_signal, generate_trend_signal
 
@@ -20,17 +21,6 @@ MAX_HOLD_BY_TF_SEC = {
     "1h": 2 * 60 * 60,
     "4h": 6 * 60 * 60,
 }
-
-
-def detect_regime(features, timeframe):
-    rel_vol = features.get("rel_vol", 1.0)
-    momentum_pct = abs(features.get("momentum_pct", 0.0))
-    z_abs = abs(features.get("z_score", 0.0))
-    if rel_vol >= 1.8:
-        return "volatile"
-    if timeframe in ["1h", "4h"]:
-        return "trend" if z_abs >= 0.8 or momentum_pct >= 0.02 else "range"
-    return "trend" if z_abs >= 1.5 or momentum_pct >= 0.03 else "range"
 
 
 def clamp(x, lo, hi):
@@ -60,7 +50,10 @@ def resolve_stake_usd(default_value=10.0):
 
 
 def load_ws_rows(profile, start_ts_ms=None, end_ts_ms=None, rows_limit=0):
-    allowed_coins = set([str(c).lower() for c in profile.get("trade_allowed_coins", [])])
+    init_db()
+    allowed_coins = set(
+        [str(c).lower() for c in profile.get("trade_allowed_coins", [])]
+    )
     allowed_tfs = set([str(tf) for tf in profile.get("trade_allowed_timeframes", [])])
     blocked_tfs = set([str(tf) for tf in profile.get("blocked_timeframes", [])])
 
@@ -151,11 +144,15 @@ def run_replay(
     opened = 0
     forced_closes = 0
     closed_pnls_pct = []
-    by_coin = defaultdict(lambda: {"trades": 0, "wins": 0, "pnl_pct": 0.0, "pnl_usd": 0.0})
+    by_coin = defaultdict(
+        lambda: {"trades": 0, "wins": 0, "pnl_pct": 0.0, "pnl_usd": 0.0}
+    )
     by_timeframe = defaultdict(
         lambda: {"trades": 0, "wins": 0, "pnl_pct": 0.0, "pnl_usd": 0.0}
     )
-    by_regime = defaultdict(lambda: {"trades": 0, "wins": 0, "pnl_pct": 0.0, "pnl_usd": 0.0})
+    by_regime = defaultdict(
+        lambda: {"trades": 0, "wins": 0, "pnl_pct": 0.0, "pnl_usd": 0.0}
+    )
     current_cycle = None
 
     def token_entry_price(side, bid, ask, mid, spread, depth):
@@ -375,7 +372,9 @@ def run_replay(
         if regime == "volatile":
             signal, confidence = None, 0.0
         elif timeframe in ["1h", "4h"] or regime == "trend":
-            signal, confidence = generate_trend_signal(features, profile, market_context)
+            signal, confidence = generate_trend_signal(
+                features, profile, market_context
+            )
         else:
             signal, confidence = generate_mean_reversion_signal(
                 features, profile, market_context
@@ -517,7 +516,9 @@ def print_breakdown(title, bucket):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Replay backtest using ws_ticks table.")
+    parser = argparse.ArgumentParser(
+        description="Replay backtest using ws_ticks table."
+    )
     parser.add_argument(
         "--profile",
         default=SELECTED_RISK_PROFILE_NAME,
@@ -529,7 +530,9 @@ def main():
         default=200000,
         help="Use only latest N ws rows for faster iteration. 0 means all rows.",
     )
-    parser.add_argument("--start-ts-ms", type=int, default=0, help="Optional start ts_ms")
+    parser.add_argument(
+        "--start-ts-ms", type=int, default=0, help="Optional start ts_ms"
+    )
     parser.add_argument("--end-ts-ms", type=int, default=0, help="Optional end ts_ms")
     parser.add_argument(
         "--latency-ms",
