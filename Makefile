@@ -4,8 +4,10 @@ PYTHONPATH_EXPORT = export PYTHONPATH=.
 PID_FILE = db/bot.pid
 DASHBOARD_PID = db/dashboard.pid
 PORTFOLIO_FILE = db/paper_portfolio.json
+BOT_SERVICE = pbot-bot
+DASHBOARD_SERVICE = pbot-dashboard
 
-.PHONY: help run backtest replay walkforward sweep sweep-apply stop status logs clean dashboard dashboard-stop reset-portfolio
+.PHONY: help run backtest replay walkforward sweep sweep-apply stop status logs clean dashboard dashboard-stop reset-portfolio account-whoami account-balance account-trades account-orders account-public-trades account-activity
 
 help:
 	@echo "Available commands:"
@@ -22,20 +24,37 @@ help:
 	@echo "  make logs            - View the latest bot logs"
 	@echo "  make clean           - Remove logs and temp files"
 	@echo '  make reset-portfolio - Reset virtual balance to $$1000 and clear trades'
+	@echo "  make account-whoami  - Show wallet address from .env credentials"
+	@echo "  make account-balance - Show collateral balance + allowance"
+	@echo "  make account-trades  - Show recent account trades"
+	@echo "  make account-orders  - Show open orders"
+	@echo "  make account-public-trades - Show trades from Data API by user address"
+	@echo "  make account-activity - Show activity feed from Data API by user address"
 
 run: stop
 	@echo "🚀 Starting Polymarket Bot..."
-	@mkdir -p db
-	@$(PYTHONPATH_EXPORT) && nohup uv run -m app.main > collector.log 2>&1 & echo $$! > $(PID_FILE)
+	@if systemctl list-unit-files | grep -q "^$(BOT_SERVICE).service"; then \
+		sudo systemctl restart $(BOT_SERVICE); \
+	else \
+		mkdir -p db; \
+		$(PYTHONPATH_EXPORT) && nohup uv run -m app.main > collector.log 2>&1 & echo $$! > $(PID_FILE); \
+	fi
 	@echo "✅ Bot started. Use 'make logs' to monitor."
 
 dashboard: dashboard-stop
 	@echo "🖥️ Starting Dashboard on port 5000..."
-	@$(PYTHONPATH_EXPORT) && nohup uv run app/dashboard.py > dashboard.log 2>&1 & echo $$! > $(DASHBOARD_PID)
+	@if systemctl list-unit-files | grep -q "^$(DASHBOARD_SERVICE).service"; then \
+		sudo systemctl restart $(DASHBOARD_SERVICE); \
+	else \
+		$(PYTHONPATH_EXPORT) && nohup uv run app/dashboard.py > dashboard.log 2>&1 & echo $$! > $(DASHBOARD_PID); \
+	fi
 	@echo "✅ Dashboard started. Access at http://your-ec2-ip:5000"
 
 dashboard-stop:
-	@if [ -f $(DASHBOARD_PID) ]; then \
+	@if systemctl list-unit-files | grep -q "^$(DASHBOARD_SERVICE).service"; then \
+		echo "🛑 Stopping Dashboard service ($(DASHBOARD_SERVICE))..."; \
+		sudo systemctl stop $(DASHBOARD_SERVICE); \
+	elif [ -f $(DASHBOARD_PID) ]; then \
 		PID=$$(cat $(DASHBOARD_PID)); \
 		echo "🛑 Stopping Dashboard (PID $$PID)..."; \
 		kill $$PID 2>/dev/null || true; \
@@ -64,7 +83,9 @@ sweep-apply:
 
 stop:
 	@echo "🛑 Stopping Polymarket Bot..."
-	@if [ -f $(PID_FILE) ]; then \
+	@if systemctl list-unit-files | grep -q "^$(BOT_SERVICE).service"; then \
+		sudo systemctl stop $(BOT_SERVICE); \
+	elif [ -f $(PID_FILE) ]; then \
 		kill $$(cat $(PID_FILE)) 2>/dev/null || true; \
 		rm -f $(PID_FILE); \
 	fi
@@ -81,13 +102,43 @@ reset-portfolio: stop dashboard-stop
 	@$(MAKE) --no-print-directory dashboard
 
 status:
-	@if [ -f $(PID_FILE) ] && ps -p $$(cat $(PID_FILE)) > /dev/null; then echo "🟢 Bot: RUNNING"; else echo "🔴 Bot: STOPPED"; fi
-	@if [ -f $(DASHBOARD_PID) ] && ps -p $$(cat $(DASHBOARD_PID)) > /dev/null; then echo "🟢 Dashboard: RUNNING (Port 5000)"; else echo "🔴 Dashboard: STOPPED"; fi
+	@if systemctl list-unit-files | grep -q "^$(BOT_SERVICE).service"; then \
+		if sudo systemctl is-active --quiet $(BOT_SERVICE); then echo "🟢 Bot: RUNNING (systemd)"; else echo "🔴 Bot: STOPPED (systemd)"; fi; \
+	else \
+		if [ -f $(PID_FILE) ] && ps -p $$(cat $(PID_FILE)) > /dev/null; then echo "🟢 Bot: RUNNING"; else echo "🔴 Bot: STOPPED"; fi; \
+	fi
+	@if systemctl list-unit-files | grep -q "^$(DASHBOARD_SERVICE).service"; then \
+		if sudo systemctl is-active --quiet $(DASHBOARD_SERVICE); then echo "🟢 Dashboard: RUNNING (systemd, Port 5000)"; else echo "🔴 Dashboard: STOPPED (systemd)"; fi; \
+	else \
+		if [ -f $(DASHBOARD_PID) ] && ps -p $$(cat $(DASHBOARD_PID)) > /dev/null; then echo "🟢 Dashboard: RUNNING (Port 5000)"; else echo "🔴 Dashboard: STOPPED"; fi; \
+	fi
 
 logs:
-	@tail -f collector.log
+	@if systemctl list-unit-files | grep -q "^$(BOT_SERVICE).service"; then \
+		sudo journalctl -u $(BOT_SERVICE) -f; \
+	else \
+		tail -f collector.log; \
+	fi
 
 clean:
 	@echo "🧹 Cleaning up..."
 	rm -f current.log collector.log dashboard.log $(PID_FILE) $(DASHBOARD_PID)
 	find . -type d -name "__pycache__" -exec rm -rf {} +
+
+account-whoami:
+	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py whoami
+
+account-balance:
+	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py balance
+
+account-trades:
+	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py trades
+
+account-orders:
+	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py orders
+
+account-public-trades:
+	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py public-trades
+
+account-activity:
+	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py activity

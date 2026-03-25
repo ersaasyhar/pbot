@@ -62,7 +62,7 @@ The bot now operates on a professional architecture that mirrors institutional t
 1.  **Configure**: Fill in `.env` (API Keys) and `config.json` (MAIN profile + sizing).
 2.  **Run Bot**: `make run`
 3.  **Start Dashboard**: `make dashboard`
-4.  **Terminal**: Visit `http://<your-ec2-ip>/localhost:5000` (Uses `DASHBOARD_PASSWORD` from `.env`).
+4.  **Terminal**: Visit `http://<your-server-ip>/` (Nginx reverse proxy) or `http://<your-server-ip>:5000` (direct Flask) and log in with `DASHBOARD_PASSWORD` from `.env`.
 
 ### 📈 Maintenance & Commands
 - **Check Status**: `make status`
@@ -71,6 +71,25 @@ The bot now operates on a professional architecture that mirrors institutional t
 - **Replay Backtest**: `make replay` (Uses recorded `ws_ticks` + friction model)
 - **Walk-Forward**: `make walkforward` (Train/validate over rolling replay windows)
 - **Watch Logs**: `make logs`
+
+### 🧰 Runtime Modes (`nohup` vs `systemd`)
+
+This project supports both modes:
+
+*   **`systemd` (recommended for servers):**
+    *   Auto-restart on crash, boot persistence, and centralized logs (`journalctl`).
+    *   Service names used by this project:
+        *   `pbot-bot.service`
+        *   `pbot-dashboard.service`
+    *   Typical commands:
+        *   `sudo systemctl status pbot-bot pbot-dashboard nginx`
+        *   `sudo systemctl restart pbot-bot pbot-dashboard nginx`
+        *   `sudo journalctl -u pbot-bot -f`
+*   **`nohup` (legacy/dev fallback):**
+    *   Used when `systemd` services are not installed.
+    *   Process/log tracking is PID-file based (`db/*.pid`, `collector.log`, `dashboard.log`).
+
+`Makefile` is systemd-aware: if services exist, `make run`, `make dashboard`, `make stop`, `make dashboard-stop`, `make status`, and `make logs` use systemd; otherwise they fall back to legacy `nohup` behavior.
 
 ---
 

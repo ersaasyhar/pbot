@@ -9,17 +9,64 @@ load_dotenv()
 logger = get_logger()
 
 
+def _env_first(*names):
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
+def get_clob_runtime_config():
+    funder = _env_first("POLYMARKET_FUNDER_ADDRESS", "MY_FUNDER")
+    signature_type_raw = _env_first("POLYMARKET_SIGNATURE_TYPE")
+    signature_type = (
+        int(signature_type_raw)
+        if signature_type_raw is not None
+        else (2 if funder else 0)
+    )
+    return {
+        "host": "https://clob.polymarket.com",
+        "private_key": _env_first("POLYMARKET_PK", "MY_PRIVATE_KEY"),
+        "api_key": os.getenv("POLYMARKET_API_KEY"),
+        "api_secret": os.getenv("POLYMARKET_API_SECRET"),
+        "api_passphrase": os.getenv("POLYMARKET_API_PASSPHRASE"),
+        "funder": funder,
+        "signature_type": signature_type,
+    }
+
+
 def get_clob_client():
-    host = "https://clob.polymarket.com"
-    key = os.getenv("POLYMARKET_API_KEY")
-    secret = os.getenv("POLYMARKET_API_SECRET")
-    passphrase = os.getenv("POLYMARKET_API_PASSPHRASE")
-    private_key = os.getenv("POLYMARKET_PK")
+    cfg = get_clob_runtime_config()
+    private_key = cfg["private_key"]
+    if not private_key:
+        raise RuntimeError(
+            "Missing private key. Set `POLYMARKET_PK` (or `MY_PRIVATE_KEY`)."
+        )
 
-    # Create ApiCreds object
-    creds = ApiCreds(api_key=key, api_secret=secret, api_passphrase=passphrase)
+    creds = None
+    if cfg["api_key"] and cfg["api_secret"] and cfg["api_passphrase"]:
+        creds = ApiCreds(
+            api_key=cfg["api_key"],
+            api_secret=cfg["api_secret"],
+            api_passphrase=cfg["api_passphrase"],
+        )
 
-    client = ClobClient(host, key=private_key, chain_id=POLYGON, creds=creds)
+    client = ClobClient(
+        cfg["host"],
+        key=private_key,
+        chain_id=POLYGON,
+        creds=creds,
+        signature_type=cfg["signature_type"],
+        funder=cfg["funder"],
+    )
+
+    # If API creds are not supplied, derive/create them from signer+funder context.
+    if creds is None:
+        derived = client.create_or_derive_api_creds()
+        client.set_api_creds(derived)
+        logger.info("CLOB API creds derived at runtime from signer/funder context.")
+
     return client
 
 
