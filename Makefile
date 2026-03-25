@@ -7,10 +7,11 @@ PORTFOLIO_FILE = db/paper_portfolio.json
 BOT_SERVICE = pbot-bot
 DASHBOARD_SERVICE = pbot-dashboard
 
-.PHONY: help run backtest replay walkforward sweep sweep-apply stop status logs clean dashboard dashboard-stop reset-portfolio account-whoami account-balance account-trades account-orders account-public-trades account-activity
+.PHONY: help setup run backtest replay walkforward sweep sweep-apply stop status logs clean dashboard dashboard-stop reset-portfolio account-whoami account-balance account-trades account-orders account-public-trades account-activity
 
 help:
 	@echo "Available commands:"
+	@echo "  make setup           - Install deps and git pre-commit hooks"
 	@echo "  make run             - Start the bot in the background"
 	@echo "  make backtest        - Run the historical backtester"
 	@echo "  make replay          - Run WS tick replay backtest with friction model"
@@ -30,6 +31,12 @@ help:
 	@echo "  make account-orders  - Show open orders"
 	@echo "  make account-public-trades - Show trades from Data API by user address"
 	@echo "  make account-activity - Show activity feed from Data API by user address"
+
+setup:
+	@echo "🔧 Installing dependencies and pre-commit hooks..."
+	@uv sync
+	@uvx pre-commit install --install-hooks
+	@echo "✅ Setup complete. Pre-commit hooks are active."
 
 run: stop
 	@echo "🚀 Starting Polymarket Bot..."
@@ -126,19 +133,19 @@ clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 
 account-whoami:
-	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py whoami
+	@$(PYTHONPATH_EXPORT) && uv run -m tools.polymarket_account whoami
 
 account-balance:
-	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py balance
+	@$(PYTHONPATH_EXPORT) && uv run -m tools.polymarket_account balance
 
 account-trades:
-	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py trades
+	@$(PYTHONPATH_EXPORT) && uv run -m tools.polymarket_account trades
 
 account-orders:
-	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py orders
+	@$(PYTHONPATH_EXPORT) && uv run -m tools.polymarket_account orders
 
 account-public-trades:
-	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py public-trades
+	@$(PYTHONPATH_EXPORT) && uv run -m tools.polymarket_account public-trades
 
 account-activity:
-	@$(PYTHONPATH_EXPORT) && uv run python tools/polymarket_account.py activity
+	@$(PYTHONPATH_EXPORT) && uv run -m tools.polymarket_account activity
