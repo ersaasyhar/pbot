@@ -1,11 +1,7 @@
 import argparse
 import json
-import sys
-from pathlib import Path
 from typing import Any
 import requests
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data.clob_client import get_clob_client, get_clob_runtime_config
 from py_clob_client.clob_types import (
@@ -99,7 +95,9 @@ def cmd_public_trades(args: argparse.Namespace) -> None:
     cfg = get_clob_runtime_config()
     user = args.user or cfg.get("funder")
     if not user:
-        raise SystemExit("No user address found. Set POLYMARKET_FUNDER_ADDRESS or pass --user.")
+        raise SystemExit(
+            "No user address found. Set POLYMARKET_FUNDER_ADDRESS or pass --user."
+        )
     url = "https://data-api.polymarket.com/trades"
     resp = requests.get(url, params={"user": user, "limit": args.limit}, timeout=20)
     resp.raise_for_status()
@@ -110,7 +108,9 @@ def cmd_activity(args: argparse.Namespace) -> None:
     cfg = get_clob_runtime_config()
     user = args.user or cfg.get("funder")
     if not user:
-        raise SystemExit("No user address found. Set POLYMARKET_FUNDER_ADDRESS or pass --user.")
+        raise SystemExit(
+            "No user address found. Set POLYMARKET_FUNDER_ADDRESS or pass --user."
+        )
     url = "https://data-api.polymarket.com/activity"
     resp = requests.get(url, params={"user": user, "limit": args.limit}, timeout=20)
     resp.raise_for_status()
@@ -177,13 +177,17 @@ def build_parser() -> argparse.ArgumentParser:
     whoami = sub.add_parser("whoami", help="Show resolved wallet address")
     whoami.set_defaults(func=cmd_whoami)
 
-    bal = sub.add_parser("balance", help="Get collateral/conditional balance + allowance")
+    bal = sub.add_parser(
+        "balance", help="Get collateral/conditional balance + allowance"
+    )
     bal.add_argument(
         "--asset-type",
         default="collateral",
         choices=["collateral", "conditional"],
     )
-    bal.add_argument("--token-id", default=None, help="Required for conditional balance")
+    bal.add_argument(
+        "--token-id", default=None, help="Required for conditional balance"
+    )
     bal.add_argument("--signature-type", type=int, default=-1)
     bal.set_defaults(func=cmd_balance)
 
