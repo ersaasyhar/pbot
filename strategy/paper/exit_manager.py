@@ -82,6 +82,17 @@ def update_paper_trades(current_prices, market_state=None):
         selected_risk = risk_profile_for_timeframe(timeframe)
         tp_pct = float(selected_risk.get("tp_pct", 0.12))
         sl_pct = float(selected_risk.get("sl_pct", 0.08))
+        contextual_sl_enabled = bool(selected_risk.get("contextual_sl_enabled", False))
+        non_dom_thresh = float(
+            selected_risk.get("non_dominant_distance_threshold", 0.10)
+        )
+        non_dom_sl_pct = float(selected_risk.get("non_dominant_sl_pct", sl_pct))
+        early_hold_seconds = int(selected_risk.get("early_hold_seconds", 90))
+        early_sl_pct = float(selected_risk.get("early_sl_pct", sl_pct))
+        unresolved_band = float(selected_risk.get("unresolved_band", 0.03))
+        hold_time_stop_before_end_sec = int(
+            selected_risk.get("hold_time_stop_before_end_sec", 45)
+        )
         max_hold_sec = max_hold_by_tf_sec.get(timeframe, 15 * 60)
         end_time = trade.get("end_time")
         if end_time is None and market_state and market_id in market_state:
@@ -124,10 +135,31 @@ def update_paper_trades(current_prices, market_state=None):
         entry = trade["entry_price"]
         move_pct = (cur_trade_price - entry) / entry
 
+        effective_sl_pct = sl_pct
+        if contextual_sl_enabled:
+            entry_yes = float(
+                trade.get(
+                    "yes_price_at_entry",
+                    entry if trade["side"] == "BUY YES" else round(1.0 - entry, 4),
+                )
+            )
+            dominance = abs(entry_yes - 0.5)
+            if dominance < non_dom_thresh:
+                effective_sl_pct = min(effective_sl_pct, non_dom_sl_pct)
+            if hold_seconds <= early_hold_seconds:
+                effective_sl_pct = min(effective_sl_pct, early_sl_pct)
+
         early_reason = None
         if end_time:
             if now.timestamp() > float(end_time) + 30:
                 early_reason = "TIME"
+            else:
+                remaining = float(end_time) - now.timestamp()
+                if (
+                    remaining <= hold_time_stop_before_end_sec
+                    and abs(float(cur_yes_price) - 0.5) <= unresolved_band
+                ):
+                    early_reason = "TIME_UNRESOLVED"
         elif hold_seconds >= max_hold_sec:
             early_reason = "TIME"
 
@@ -142,7 +174,7 @@ def update_paper_trades(current_prices, market_state=None):
             if trade["side"] == "BUY NO" and pressure > 0.20:
                 early_reason = early_reason or "PRESSURE_FLIP"
 
-        if move_pct >= tp_pct or move_pct <= -sl_pct or early_reason:
+        if move_pct >= tp_pct or move_pct <= -effective_sl_pct or early_reason:
             total_pnl = round(move_pct * trade["entry_cost"], 2)
             total_pnl = max(total_pnl, -trade["entry_cost"])
             payout = round(trade["entry_cost"] + total_pnl, 2)

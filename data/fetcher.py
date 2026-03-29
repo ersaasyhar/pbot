@@ -4,6 +4,7 @@ import time
 import json
 from app.config import (
     ACTIVE_COINS,
+    BOT_CONFIG,
     RISK_PROFILES,
     SELECTED_RISK_PROFILE_NAME,
 )
@@ -25,13 +26,17 @@ logger = get_logger()
 def _resolve_discovery_universe():
     profile = RISK_PROFILES.get(SELECTED_RISK_PROFILE_NAME, {})
 
-    allowed_coins = profile.get("trade_allowed_coins", [])
+    # Discovery can be broader than execution.
+    # If not set, we fall back to the selected risk profile universe.
+    discovery_coins = BOT_CONFIG.get("discovery_allowed_coins", [])
+    allowed_coins = discovery_coins or profile.get("trade_allowed_coins", [])
     if allowed_coins:
         coins = [str(c).lower() for c in allowed_coins]
     else:
         coins = [str(c).lower() for c in ACTIVE_COINS]
 
-    allowed_tfs = profile.get("trade_allowed_timeframes", [])
+    discovery_tfs = BOT_CONFIG.get("discovery_allowed_timeframes", [])
+    allowed_tfs = discovery_tfs or profile.get("trade_allowed_timeframes", [])
     if allowed_tfs:
         tf_keys = [str(tf) for tf in allowed_tfs if str(tf) in BASE_TIMEFRAMES]
     else:

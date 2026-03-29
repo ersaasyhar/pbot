@@ -2,6 +2,7 @@ from datetime import datetime
 
 from app.logger import get_logger
 from strategy.paper.risk_manager import calculate_stake
+from strategy.paper.risk_manager import risk_profile_for_timeframe
 from strategy.paper.storage_adapter import (
     adjust_portfolio_balance,
     upsert_paper_trade_entry,
@@ -24,6 +25,8 @@ def execute_virtual_trade(
     regime=None,
     signal_age_sec=None,
     end_time=None,
+    simulated_slippage_pct=None,
+    max_slippage_abs=None,
 ):
     portfolio = load_portfolio()
     if market_id in portfolio["active_trades"]:
@@ -49,12 +52,25 @@ def execute_virtual_trade(
     if side_count >= 3:
         return False
 
-    slippage_pct = 0.005
+    selected_risk = risk_profile_for_timeframe(timeframe)
+    slippage_pct = (
+        float(simulated_slippage_pct)
+        if simulated_slippage_pct is not None
+        else float(selected_risk.get("simulated_slippage_pct", 0.005))
+    )
     actual_entry_price = (
         price * (1.0 + slippage_pct)
         if side == "BUY YES"
         else price * (1.0 - slippage_pct)
     )
+    fill_slippage_abs = abs(actual_entry_price - price)
+    max_allowed_slippage = (
+        float(max_slippage_abs)
+        if max_slippage_abs is not None
+        else float(selected_risk.get("max_entry_slippage_abs", 0.03))
+    )
+    if fill_slippage_abs > max_allowed_slippage:
+        return False
 
     trade_price = (
         actual_entry_price if side == "BUY YES" else round(1.0 - actual_entry_price, 4)
@@ -78,6 +94,7 @@ def execute_virtual_trade(
         "confidence": confidence,
         "effective_ev_at_entry": effective_ev,
         "regime_at_entry": regime,
+        "setup_label": f"{regime}:{side}",
         "signal_age_sec": signal_age_sec,
         "yes_price_at_entry": round(actual_entry_price, 4),
         "entry_price": round(trade_price, 4),

@@ -71,6 +71,57 @@ def init_db_schema():
 
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS external_spot_ticks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_ms INTEGER,
+            venue TEXT,
+            symbol TEXT,
+            bid REAL,
+            ask REAL,
+            mid REAL,
+            spread REAL,
+            spread_bps REAL,
+            bid_size REAL,
+            ask_size REAL,
+            imbalance REAL,
+            momentum_10s REAL,
+            inserted_ts INTEGER
+        )
+        """
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_external_spot_symbol_ts ON external_spot_ticks(symbol, ts_ms)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_external_spot_ts ON external_spot_ticks(ts_ms)"
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS perp_context_ticks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_ms INTEGER,
+            venue TEXT,
+            symbol TEXT,
+            funding_rate REAL,
+            open_interest REAL,
+            oi_delta_1m REAL,
+            liq_long_1m REAL,
+            liq_short_1m REAL,
+            basis_bps REAL,
+            inserted_ts INTEGER
+        )
+        """
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_perp_context_symbol_ts ON perp_context_ticks(symbol, ts_ms)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_perp_context_ts ON perp_context_ticks(ts_ms)"
+    )
+
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS paper_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trade_id TEXT UNIQUE,

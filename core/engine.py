@@ -3,6 +3,7 @@ import sqlite3
 
 from app.bootstrap import bootstrap_runtime
 from app.config import (
+    BOT_CONFIG,
     RISK_PROFILES,
     SELECTED_RISK_PROFILE_NAME,
     SELECTED_SIZING_PROFILE_NAME,
@@ -11,6 +12,7 @@ from app.logger import get_logger
 from core.market_registry import upsert_active_markets
 from core.runtime_state import RuntimeState
 from core.services.event_router import EventRouter
+from core.services.external_context_service import ExternalContextService
 from core.services.sync_coordinator import SyncCoordinator
 from core.services.trading_pipeline import TradingPipeline
 from data.fetcher import fetch_markets_async
@@ -53,6 +55,11 @@ async def run():
         sizing_profile_name=SIZING_PROFILE_NAME,
     )
     event_router = EventRouter(pipeline=pipeline)
+    external_context_service = ExternalContextService(
+        runtime=RUNTIME,
+        logger=logger,
+        bot_config=BOT_CONFIG,
+    )
     sync_coordinator = SyncCoordinator(
         runtime=RUNTIME,
         logger=logger,
@@ -66,6 +73,7 @@ async def run():
     logger.info(f"Loaded {len(initial_tokens)} markets for initial WS subscription.")
 
     asyncio.create_task(sync_coordinator.sync_loop())
+    asyncio.create_task(external_context_service.run())
     await RUNTIME.ws_client.connect_and_listen(initial_tokens, event_router.on_ws_event)
 
 

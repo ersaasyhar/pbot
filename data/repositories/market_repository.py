@@ -68,6 +68,59 @@ def insert_ws_ticks_bulk(conn, ticks):
     conn.commit()
 
 
+def insert_external_spot_tick(conn, tick):
+    now = int(time.time())
+    conn.execute(
+        """
+        INSERT INTO external_spot_ticks (
+            ts_ms, venue, symbol, bid, ask, mid, spread, spread_bps,
+            bid_size, ask_size, imbalance, momentum_10s, inserted_ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(tick.get("ts_ms") or (now * 1000)),
+            tick.get("venue", "binance_spot"),
+            tick.get("symbol", "BTCUSDT"),
+            tick.get("bid"),
+            tick.get("ask"),
+            tick.get("mid"),
+            tick.get("spread"),
+            tick.get("spread_bps"),
+            tick.get("bid_size"),
+            tick.get("ask_size"),
+            tick.get("imbalance"),
+            tick.get("momentum_10s"),
+            now,
+        ),
+    )
+    conn.commit()
+
+
+def insert_perp_context_tick(conn, tick):
+    now = int(time.time())
+    conn.execute(
+        """
+        INSERT INTO perp_context_ticks (
+            ts_ms, venue, symbol, funding_rate, open_interest, oi_delta_1m,
+            liq_long_1m, liq_short_1m, basis_bps, inserted_ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(tick.get("ts_ms") or (now * 1000)),
+            tick.get("venue", "binance_futures"),
+            tick.get("symbol", "BTCUSDT"),
+            tick.get("funding_rate"),
+            tick.get("open_interest"),
+            tick.get("oi_delta_1m"),
+            tick.get("liq_long_1m"),
+            tick.get("liq_short_1m"),
+            tick.get("basis_bps"),
+            now,
+        ),
+    )
+    conn.commit()
+
+
 def get_market_end_time(market_id):
     if not market_id:
         return None
@@ -187,3 +240,68 @@ def get_last_price(conn, market_id):
         return None
 
     return {"price": float(row[0]), "volume": float(row[1])}
+
+
+def get_latest_external_spot(conn, symbol="BTCUSDT", max_age_ms=15000):
+    now_ms = int(time.time() * 1000)
+    cur = conn.execute(
+        """
+        SELECT ts_ms, venue, symbol, bid, ask, mid, spread, spread_bps,
+               bid_size, ask_size, imbalance, momentum_10s
+        FROM external_spot_ticks
+        WHERE symbol = ?
+        ORDER BY ts_ms DESC
+        LIMIT 1
+        """,
+        (symbol,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    if (now_ms - int(row[0])) > int(max_age_ms):
+        return None
+    return {
+        "ts_ms": int(row[0]),
+        "venue": row[1],
+        "symbol": row[2],
+        "bid": float(row[3]) if row[3] is not None else None,
+        "ask": float(row[4]) if row[4] is not None else None,
+        "mid": float(row[5]) if row[5] is not None else None,
+        "spread": float(row[6]) if row[6] is not None else None,
+        "spread_bps": float(row[7]) if row[7] is not None else None,
+        "bid_size": float(row[8]) if row[8] is not None else None,
+        "ask_size": float(row[9]) if row[9] is not None else None,
+        "imbalance": float(row[10]) if row[10] is not None else None,
+        "momentum_10s": float(row[11]) if row[11] is not None else None,
+    }
+
+
+def get_latest_perp_context(conn, symbol="BTCUSDT", max_age_ms=30000):
+    now_ms = int(time.time() * 1000)
+    cur = conn.execute(
+        """
+        SELECT ts_ms, venue, symbol, funding_rate, open_interest, oi_delta_1m,
+               liq_long_1m, liq_short_1m, basis_bps
+        FROM perp_context_ticks
+        WHERE symbol = ?
+        ORDER BY ts_ms DESC
+        LIMIT 1
+        """,
+        (symbol,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    if (now_ms - int(row[0])) > int(max_age_ms):
+        return None
+    return {
+        "ts_ms": int(row[0]),
+        "venue": row[1],
+        "symbol": row[2],
+        "funding_rate": float(row[3]) if row[3] is not None else None,
+        "open_interest": float(row[4]) if row[4] is not None else None,
+        "oi_delta_1m": float(row[5]) if row[5] is not None else None,
+        "liq_long_1m": float(row[6]) if row[6] is not None else None,
+        "liq_short_1m": float(row[7]) if row[7] is not None else None,
+        "basis_bps": float(row[8]) if row[8] is not None else None,
+    }

@@ -12,6 +12,10 @@ Market-data clients plus persistence facade for the rest of the codebase.
 - `db_config.py`: DB path/config constants.
 - `repositories/`: Concrete SQLite repository modules.
 
+Additional persisted context:
+- `external_spot_ticks` (Binance spot book ticker-derived features)
+- `perp_context_ticks` (funding/open-interest/liquidation context)
+
 ## Usage
 Import `data.storage` for persistence API used by runtime/strategy.
 

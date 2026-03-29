@@ -59,6 +59,8 @@ class TradingPipeline:
                 regime=candidate["regime"],
                 signal_age_sec=candidate["signal_age_sec"],
                 end_time=candidate.get("end_time"),
+                simulated_slippage_pct=candidate.get("simulated_slippage_pct"),
+                max_slippage_abs=candidate.get("max_entry_slippage_abs"),
             )
             if opened:
                 selected += 1
@@ -240,6 +242,115 @@ class TradingPipeline:
             strategy_name = "REVERSION"
         return signal, confidence, strategy_name, regime, profile_tf
 
+    def _is_price_in_no_trade_zone(self, yes_price, profile_tf):
+        zone_min = float(profile_tf.get("no_trade_yes_min", 0.45))
+        zone_max = float(profile_tf.get("no_trade_yes_max", 0.55))
+        return zone_min <= float(yes_price) <= zone_max
+
+    def _entry_displacement_and_momentum_ok(
+        self, signal, yes_price, features, profile_tf
+    ):
+        min_disp = float(profile_tf.get("min_strike_displacement", 0.10))
+        min_momo = float(profile_tf.get("entry_momentum_min_abs", 0.0))
+        if abs(float(yes_price) - 0.5) < min_disp:
+            return False
+        momentum = float(features.get("momentum", 0.0))
+        if signal == "BUY YES" and momentum < min_momo:
+            return False
+        if signal == "BUY NO" and momentum > -min_momo:
+            return False
+        return True
+
+    def _passes_two_timeframe_confirmation(self, market, signal, profile_tf, now_ts):
+        if not bool(profile_tf.get("require_multi_tf_confirmation", False)):
+            return True
+        required_tfs = [str(tf) for tf in profile_tf.get("confirmation_timeframes", [])]
+        if not required_tfs:
+            return True
+        coin = (market.get("coin") or "").lower()
+        max_age = int(profile_tf.get("confirmation_max_age_sec", 180))
+        for tf in required_tfs:
+            snap = self.runtime.latest_tf_signals.get((coin, tf))
+            if not snap:
+                return False
+            if snap.get("side") != signal:
+                return False
+            if now_ts - int(snap.get("ts", now_ts)) > max_age:
+                return False
+        return True
+
+    def _passes_hold_entry_filters(
+        self, market, signal, yes_price, features, profile_tf
+    ):
+        if str(profile_tf.get("mode", "main")).lower() != "hold":
+            return True
+
+        now_ts = int(time.time())
+        end_time = int(market.get("end_time") or 0)
+        if end_time > 0:
+            remaining = end_time - now_ts
+            min_rem = int(profile_tf.get("hold_entry_min_remaining_sec", 30))
+            max_rem = int(profile_tf.get("hold_entry_window_sec", 300))
+            if remaining < min_rem or remaining > max_rem:
+                return False
+
+        pressure = float(features.get("pressure", 0.0))
+        min_abs_pressure = float(profile_tf.get("hold_min_abs_pressure", 0.15))
+        if abs(pressure) < min_abs_pressure:
+            return False
+        if signal == "BUY YES" and pressure <= 0:
+            return False
+        if signal == "BUY NO" and pressure >= 0:
+            return False
+
+        reversal_move = float(profile_tf.get("reversal_recent_move_pct", 0.05))
+        reversal_band = float(profile_tf.get("reversal_strike_buffer", 0.08))
+        near_strike = abs(float(yes_price) - 0.5) <= reversal_band
+        if (
+            near_strike
+            and abs(float(features.get("recent_move_pct", 0.0))) >= reversal_move
+        ):
+            return False
+        return True
+
+    def _passes_external_context_filters(self, signal, profile_tf):
+        if not bool(profile_tf.get("external_context_enabled", False)):
+            return True
+
+        spot = self.runtime.latest_external_spot or {}
+        perp = self.runtime.latest_perp_context or {}
+        if not spot or not perp:
+            return False
+
+        max_spread_bps = float(profile_tf.get("ext_max_spot_spread_bps", 4.0))
+        spread_bps = float(spot.get("spread_bps") or 0.0)
+        if spread_bps > max_spread_bps:
+            return False
+
+        min_spot_momentum = float(profile_tf.get("ext_min_spot_momentum_10s", 0.0))
+        spot_momentum = float(spot.get("momentum_10s") or 0.0)
+        if signal == "BUY YES" and spot_momentum < min_spot_momentum:
+            return False
+        if signal == "BUY NO" and spot_momentum > -min_spot_momentum:
+            return False
+
+        adverse_oi = float(profile_tf.get("ext_max_adverse_oi_delta_1m", 0.0))
+        oi_delta = float(perp.get("oi_delta_1m") or 0.0)
+        if adverse_oi > 0:
+            if signal == "BUY YES" and oi_delta < -adverse_oi:
+                return False
+            if signal == "BUY NO" and oi_delta > adverse_oi:
+                return False
+
+        liq_adverse_ratio = float(profile_tf.get("ext_liq_adverse_ratio", 2.0))
+        liq_long = float(perp.get("liq_long_1m") or 0.0)
+        liq_short = float(perp.get("liq_short_1m") or 0.0)
+        if signal == "BUY YES" and liq_long > (liq_short * liq_adverse_ratio):
+            return False
+        if signal == "BUY NO" and liq_short > (liq_long * liq_adverse_ratio):
+            return False
+        return True
+
     def _update_analysis_state(
         self,
         market_id,
@@ -297,6 +408,28 @@ class TradingPipeline:
             self.runtime.signal_state.pop(market_id, None)
             return
 
+        now = int(time.time())
+        self.runtime.latest_tf_signals[
+            ((market.get("coin") or "").lower(), market["timeframe"])
+        ] = {
+            "side": signal,
+            "ts": now,
+        }
+        if self._is_price_in_no_trade_zone(price, profile_tf):
+            return
+        if not self._entry_displacement_and_momentum_ok(
+            signal, price, features, profile_tf
+        ):
+            return
+        if not self._passes_two_timeframe_confirmation(market, signal, profile_tf, now):
+            return
+        if not self._passes_hold_entry_filters(
+            market, signal, price, features, profile_tf
+        ):
+            return
+        if not self._passes_external_context_filters(signal, profile_tf):
+            return
+
         tp_reward = 0.10
         sl_risk = 0.05
         raw_ev = (confidence * tp_reward) - ((1.0 - confidence) * sl_risk)
@@ -316,7 +449,6 @@ class TradingPipeline:
         if effective_ev < min_effective_ev:
             return
 
-        now = int(time.time())
         state = self.runtime.signal_state.get(market_id)
         if state and state.get("side") == signal:
             first_seen = state.get("first_seen", now)
@@ -363,6 +495,8 @@ class TradingPipeline:
                 "signal_age_sec": signal_age_sec,
                 "decayed_ev": decayed_ev,
                 "end_time": market.get("end_time"),
+                "simulated_slippage_pct": profile_tf.get("simulated_slippage_pct"),
+                "max_entry_slippage_abs": profile_tf.get("max_entry_slippage_abs"),
                 "queued_at": now,
             }
         )

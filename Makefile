@@ -7,7 +7,7 @@ PORTFOLIO_FILE = db/paper_portfolio.json
 BOT_SERVICE = pbot-bot
 DASHBOARD_SERVICE = pbot-dashboard
 
-.PHONY: help setup run backtest replay walkforward sweep sweep-apply stop status logs clean dashboard dashboard-stop reset-portfolio account-whoami account-balance account-trades account-orders account-public-trades account-activity
+.PHONY: help setup run backtest replay replay-ab walkforward walkforward-ab sweep sweep-apply stop status logs clean dashboard dashboard-stop reset-portfolio context-stats account-whoami account-balance account-trades account-orders account-public-trades account-activity
 
 help:
 	@echo "Available commands:"
@@ -15,7 +15,9 @@ help:
 	@echo "  make run             - Start the bot in the background"
 	@echo "  make backtest        - Run the historical backtester"
 	@echo "  make replay          - Run WS tick replay backtest with friction model"
+	@echo "  make replay-ab       - Compare MAIN vs MAIN_HOLD on same replay window"
 	@echo "  make walkforward     - Run walk-forward tuning/validation on WS replay data"
+	@echo "  make walkforward-ab  - Walk-forward A/B with min-trade filter per fold"
 	@echo "  make sweep           - Run parameter sweep for fast calibration"
 	@echo "  make sweep-apply     - Run sweep and apply best params to selected profile"
 	@echo "  make stop            - Stop the background bot"
@@ -25,6 +27,7 @@ help:
 	@echo "  make logs            - View the latest bot logs"
 	@echo "  make clean           - Remove logs and temp files"
 	@echo '  make reset-portfolio - Reset virtual balance to $$1000 and clear trades'
+	@echo "  make context-stats   - Show latest external context row counts"
 	@echo "  make account-whoami  - Show wallet address from .env credentials"
 	@echo "  make account-balance - Show collateral balance + allowance"
 	@echo "  make account-trades  - Show recent account trades"
@@ -55,7 +58,7 @@ dashboard: dashboard-stop
 	else \
 		$(PYTHONPATH_EXPORT) && nohup uv run app/dashboard.py > dashboard.log 2>&1 & echo $$! > $(DASHBOARD_PID); \
 	fi
-	@echo "✅ Dashboard started. Access at http://your-ec2-ip:5000"
+	@echo "✅ Dashboard started. Access at http://<your-ec2-ip>:5000 or http://localhost:5000"
 
 dashboard-stop:
 	@if systemctl list-unit-files | grep -q "^$(DASHBOARD_SERVICE).service"; then \
@@ -76,9 +79,17 @@ replay:
 	@echo "🎬 Running WS Replay Backtest..."
 	@$(PYTHONPATH_EXPORT) && uv run -m backtest.replay
 
+replay-ab:
+	@echo "🆚 Running A/B Replay (MAIN vs MAIN_HOLD)..."
+	@$(PYTHONPATH_EXPORT) && uv run -m backtest.ab_compare --profile-a MAIN --profile-b MAIN_HOLD --rows-limit 0
+
 walkforward:
 	@echo "🧪 Running Walk-Forward Replay Validation..."
 	@$(PYTHONPATH_EXPORT) && uv run -m backtest.walkforward
+
+walkforward-ab:
+	@echo "🧪 Running Walk-Forward A/B (MAIN vs MAIN_HOLD)..."
+	@$(PYTHONPATH_EXPORT) && uv run -m backtest.walkforward_ab --profile-a MAIN --profile-b MAIN_HOLD --rows-limit 0 --folds 6 --min-closed-test 3
 
 sweep:
 	@echo "🧪 Running Parameter Sweep..."
@@ -107,6 +118,9 @@ reset-portfolio: stop dashboard-stop
 	@echo "✅ Portfolio deleted. Starting fresh bot..."
 	@$(MAKE) --no-print-directory run
 	@$(MAKE) --no-print-directory dashboard
+
+context-stats:
+	@$(PYTHONPATH_EXPORT) && uv run python -c "import sqlite3; from data.storage import DB_PATH, init_db; init_db(); conn=sqlite3.connect(DB_PATH); c=conn.cursor(); c.execute('SELECT COUNT(*) FROM external_spot_ticks'); s=c.fetchone()[0]; c.execute('SELECT COUNT(*) FROM perp_context_ticks'); p=c.fetchone()[0]; print({'external_spot_ticks': s, 'perp_context_ticks': p}); conn.close()"
 
 status:
 	@if systemctl list-unit-files | grep -q "^$(BOT_SERVICE).service"; then \

@@ -33,11 +33,12 @@ Then:
 - [9. Main Commands](#9-main-commands)
 - [10. Code Quality (Pre-Commit + CI)](#10-code-quality-pre-commit--ci)
 - [11. Backtest and Research Workflow](#11-backtest-and-research-workflow)
-- [12. Polymarket Account Tools](#12-polymarket-account-tools)
-- [13. Data and Storage](#13-data-and-storage)
-- [14. Risk Model Summary](#14-risk-model-summary)
-- [15. Troubleshooting](#15-troubleshooting)
-- [16. Security Notes](#16-security-notes)
+- [12. Strategy Profiles](#12-strategy-profiles)
+- [13. Polymarket Account Tools](#13-polymarket-account-tools)
+- [14. Data and Storage](#14-data-and-storage)
+- [15. Risk Model Summary](#15-risk-model-summary)
+- [16. Troubleshooting](#16-troubleshooting)
+- [17. Security Notes](#17-security-notes)
 
 ## 1. What This Project Is
 This project is a Python-based trading/research system centered on Polymarket crypto event markets.
@@ -123,6 +124,18 @@ Important `MAIN` controls:
 - `max_entries_per_cycle`
 - `tp_pct`, `sl_pct`
 - `max_spread`, `min_depth_top5`
+- `mode` (`main` or `hold`)
+- `no_trade_yes_min`, `no_trade_yes_max`
+- `min_strike_displacement`
+- `require_multi_tf_confirmation`, `confirmation_timeframes`
+- `contextual_sl_enabled`, `non_dominant_sl_pct`, `early_sl_pct`
+- `max_entry_slippage_abs`
+
+Discovery controls (optional, under `bot`):
+- `discovery_allowed_timeframes` lets you ingest additional market windows for research
+  without changing entry/trade timeframes in the selected risk profile.
+- `external_context_enabled`, `external_spot_symbol`, `external_perp_symbol`,
+  `perp_poll_interval_sec` control BTC spot/perp context collectors.
 
 Config is validated at startup (`app/config_validation.py`).
 
@@ -169,10 +182,12 @@ Core operations:
 - `make status`
 - `make logs`
 - `make reset-portfolio`
+- `make context-stats`
 
 Research/evaluation:
 - `make backtest`
 - `make replay`
+- `make replay-ab`
 - `make walkforward`
 - `make sweep`
 - `make sweep-apply`
@@ -224,9 +239,43 @@ A/B profile comparison pattern (example):
 ```bash
 uv run -m backtest.replay --profile MAIN --rows-limit 0
 uv run -m backtest.replay --profile MAIN_HOLD --rows-limit 0
+make replay-ab
 ```
 
-## 12. Polymarket Account Tools
+Replay now prints diagnostics automatically:
+- `resolved_alignment_rate` (overall + by timeframe/side/setup)
+- `sl_saved_loss_vs_cut_winner`
+- `setup_expectancy_pct_per_trade`
+
+Run `MAIN_HOLD` on `5m` only (after `ws_ticks` has `5m` rows):
+```bash
+UV_CACHE_DIR=.uv-cache uv run python - <<'PY'
+from app.config import RISK_PROFILES
+from backtest.replay import load_ws_rows, run_replay, resolve_stake_usd
+p = dict(RISK_PROFILES["MAIN_HOLD"])
+p["trade_allowed_timeframes"] = ["5m"]
+rows = load_ws_rows(p, rows_limit=0)
+print("rows", len(rows))
+r = run_replay(rows, p, stake_usd=resolve_stake_usd(10.0), latency_ms=250, extra_slippage=0.001)
+print(r)
+PY
+```
+
+## 12. Strategy Profiles
+- `MAIN`: current baseline strategy profile.
+- `MAIN_HOLD`: hold-to-resolution variant for your manual style hypothesis.
+
+`MAIN_HOLD` key differences:
+- `tp_pct = 5.0` (effectively disables normal TP exits)
+- `sl_pct = 0.30` (catastrophic/emergency stop)
+- Entry filters and market constraints remain aligned with `MAIN` for fair A/B tests.
+
+Recommended A/B command:
+```bash
+make replay-ab
+```
+
+## 13. Polymarket Account Tools
 Primary utility:
 ```bash
 uv run -m tools.polymarket_account --help
@@ -242,10 +291,12 @@ Make wrappers:
 
 Order placement commands support dry-run patterns first and explicit confirmation for posting/canceling.
 
-## 13. Data and Storage
+## 14. Data and Storage
 SQLite tables used by runtime/research:
 - `market_prices`
 - `ws_ticks`
+- `external_spot_ticks`
+- `perp_context_ticks`
 - `paper_trades`
 - `paper_portfolio_state`
 
@@ -255,7 +306,7 @@ Storage API entrypoint:
 Concrete SQL modules:
 - `data/repositories/*`
 
-## 14. Risk Model Summary
+## 15. Risk Model Summary
 Core protections currently in place:
 - EV-based trade rejection
 - Spread and liquidity filters
@@ -266,7 +317,7 @@ Core protections currently in place:
 - Circuit breaker logic
 - TP/SL + time/stale exit handling
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 `uv` cache/write issues on restricted environments:
 ```bash
 mkdir -p .uv-cache
@@ -280,7 +331,7 @@ No replay data available:
 Config startup failures:
 - Check selected profile names and required keys in `config.json`.
 
-## 16. Security Notes
+## 17. Security Notes
 - Never commit real secrets from `.env`.
 - Treat account exports and private CSVs as sensitive.
 - Keep DB and logs out of commits unless explicitly needed.
